@@ -20,10 +20,27 @@
   function extract(card) {
     for (const a of card.querySelectorAll('a[href]')) {
       const url=sourceURL(a.href);
-      if(url) return {url,title:(card.querySelector('.VideoSnippet-Title')?.textContent||a.title||'Видео').trim().slice(0,200)};
+      if(url) return {url,title:(card.querySelector('.VideoSnippet-Title, .VideoViewer-DetailsTitle')?.textContent||a.title||'Видео').trim().slice(0,200)};
     }
     return null;
   }
-  root.YVD = {sourceURL,extract};
+  function currentVideo(doc, pageURL) {
+    let page;
+    try { page=new URL(pageURL); } catch { return null; }
+    if (['vkvideo.ru','vk.com'].includes(page.hostname)) {
+      const url=sourceURL(page.href);
+      return url ? {url,title:(doc.querySelector('meta[property="og:title"]')?.content || doc.title || 'Видео').slice(0,200)} : null;
+    }
+    if ((page.hostname==='ya.ru'||page.hostname==='yandex.ru'||page.hostname.endsWith('.yandex.ru')) && /^\/video\/preview\/\d+/.test(page.pathname)) {
+      // Scope to player details. Related cards have their own unrelated sources.
+      for (const details of doc.querySelectorAll('.VideoViewer-Details')) {
+        if (!details.getClientRects().length) continue;
+        const info=extract(details);
+        if (info) return info;
+      }
+    }
+    return null;
+  }
+  root.YVD = {sourceURL,extract,currentVideo};
   if(typeof module !== 'undefined') module.exports=root.YVD;
 })(typeof globalThis!=='undefined'?globalThis:this);

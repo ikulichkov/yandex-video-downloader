@@ -1,6 +1,13 @@
 const jobs = new Map();
 const HOST = 'ru.local.yandex_video_downloader';
-const allowedPage = value => { try { const u=new URL(value);return u.protocol==='https:'&&(u.hostname==='ya.ru'||u.hostname==='yandex.ru'||u.hostname.endsWith('.yandex.ru'))&&u.pathname.startsWith('/video/'); }catch{return false;} };
+const allowedPage = value => {
+  try {
+    const u=new URL(value);
+    if(u.protocol!=='https:'||u.username||u.password||u.port) return false;
+    if((u.hostname==='ya.ru'||u.hostname==='yandex.ru'||u.hostname.endsWith('.yandex.ru'))&&u.pathname.startsWith('/video/')) return true;
+    return ['vkvideo.ru','vk.com'].includes(u.hostname) && Boolean(YVD.sourceURL(value));
+  }catch{return false;}
+};
 importScripts('cards.js');
 function notify(job, state) {
   job.state={url:job.url,...state};

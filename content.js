@@ -5,7 +5,7 @@
     ui.replaceChildren();
     const state=info&&states.get(info.url);
     const button=document.createElement('button');button.type='button';button.className='yvd-button';
-    button.textContent=active(state)?'Отменить':'↓ Скачать';
+    button.textContent=active(state)?'Отменить':ui.id==='yvd-current'?'↓ Скачать текущее видео':'↓ Скачать';
     button.disabled=!info;
     button.title=info?'Скачать полное видео с исходного сайта':'Источник этого видео пока не поддерживается';
     button.addEventListener('click',async e=>{
@@ -18,9 +18,18 @@
     const status=document.createElement('span');status.className='yvd-status';status.setAttribute('aria-live','polite');
     status.textContent=state?.status==='done'?'✓ Сохранено в Загрузки/Яндекс Видео':state?.text||(!info?'Источник не поддерживается':'');
     status.title=state?.filename||status.textContent;
+    if(ui.id==='yvd-current'){const title=document.createElement('span');title.className='yvd-current-title';title.textContent=info.title;ui.append(title);}
     ui.append(button,status);
   }
   function refresh(){
+    const current=YVD.currentVideo(document,location.href);
+    let panel=document.getElementById('yvd-current');
+    if(!current) panel?.remove();
+    else {
+      if(!panel){panel=document.createElement('aside');panel.id='yvd-current';panel.className='yvd-tools';panel.setAttribute('aria-label','Скачать текущее видео');document.body.append(panel);}
+      const signature=JSON.stringify([current,states.get(current.url)]);
+      if(panel.dataset.signature!==signature){panel.dataset.signature=signature;render(null,panel,current);}
+    }
     for(const card of document.querySelectorAll('.VideoSnippet')) {
       let ui=card.querySelector(':scope > .yvd-tools');
       if(!ui){ui=document.createElement('div');ui.className='yvd-tools';card.append(ui);}
@@ -36,5 +45,8 @@
   }).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['href']});
   chrome.runtime.onMessage.addListener(msg=>{if(msg.type==='yvd-state'){states.set(msg.url,msg);refresh();}});
   chrome.runtime.sendMessage({type:'yvd-status'}).then(list=>{for(const s of list||[])states.set(s.url,s);refresh();}).catch(()=>{});
+  let lastPage=location.href;
+  setInterval(()=>{if(lastPage!==location.href){lastPage=location.href;refresh();}},1000);
+  window.addEventListener('popstate',refresh);
   refresh();
 })();
