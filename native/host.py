@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Private Chrome native host. No shell, cookies, credentials or listening socket."""
-import json, os, re, signal, struct, subprocess, sys, threading, time
+import json, os, re, signal, struct, subprocess, sys, threading, time, socket, ipaddress
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 HOST = 'ru.local.yandex_video_downloader'
@@ -8,20 +8,37 @@ ROOT = Path(__file__).resolve().parent.parent
 EXT_ID = (ROOT/'extension-id.txt').read_text().strip()
 
 def valid_url(value):
-    if not isinstance(value,str) or len(value)>2048 or any(ord(c)<33 for c in value): return False
+    if not isinstance(value,str) or len(value)>8192 or any(ord(c)<33 for c in value) or '\\' in value:return False
     try:
-        u=urlsplit(value)
-        if u.scheme!='https' or u.username or u.password or u.port: return False
-        h,p=u.hostname,u.path
-        if h=='dzen.ru': return bool(re.fullmatch(r'/video/watch/[a-fA-F0-9]+/?',p))
-        if h=='rutube.ru': return bool(re.fullmatch(r'/video/[a-fA-F0-9]{32}/?',p))
-        if h=='ok.ru': return bool(re.fullmatch(r'/video/[0-9]+/?',p))
-        if h in ('vk.com','vkvideo.ru'): return bool(re.fullmatch(r'/video-?[0-9]+_[0-9]+/?',p))
-        if h=='youtu.be': return bool(re.fullmatch(r'/[\w-]{11}/?',p,flags=re.ASCII))
-        if h in ('youtube.com','www.youtube.com','m.youtube.com'):
-            return bool(re.fullmatch(r'[\w-]{11}',parse_qs(u.query).get('v',[''])[0],flags=re.ASCII)) if p=='/watch' else bool(re.fullmatch(r'/(shorts|embed)/[\w-]{11}/?',p,flags=re.ASCII))
-    except (ValueError,TypeError): pass
-    return False
+        u=urlsplit(value);host=(u.hostname or '').lower().rstrip('.')
+        if u.scheme not in ('http','https') or u.username or u.password or not host or '%' in host:return False
+        if u.port is not None and not 1<=u.port<=65535:return False
+        if host=='localhost' or host.endswith(('.local','.localhost','.internal','.invalid')):return False
+        try:return ipaddress.ip_address(host).is_global
+        except ValueError:return '.' in host
+    except (ValueError,TypeError):return False
+
+def install_public_network_guard():
+    """Validate the addresses actually used for each Python connection, also on redirects."""
+    original=socket.getaddrinfo
+    def public_getaddrinfo(host,port,*args,**kwargs):
+        answers=original(host,port,*args,**kwargs)
+        if not answers or any(not ipaddress.ip_address(item[4][0].split('%')[0]).is_global for item in answers):
+            raise OSError('Private/local network targets are disabled')
+        return answers
+    socket.getaddrinfo=public_getaddrinfo
+    return original
+
+def error_message(exc):
+    text=str(exc).lower()
+    if re.search(r'sign in|log ?in|not a bot|authentication|authorization required',text):return 'Источник требует вход или подтверждения. Автоматическое скачивание недоступно.'
+    if re.search(r'private/local network|local network targets',text):return 'Локальные и внутренние сетевые адреса не скачиваются.'
+    if re.search(r'403|forbidden|access denied',text):return 'Источник запретил скачивание этого ролика.'
+    if re.search(r'429|too many requests',text):return 'Источник временно ограничил запросы. Повторите позже.'
+    if 'multiple videos' in text:return 'На странице несколько роликов. Нажмите кнопку у нужной карточки.'
+    if re.search(r'unsupported url|no video formats|no formats found',text):return 'Не найден доступный видеофайл. Источник может скрывать или защищать поток.'
+    if re.search(r'timeout|timed out|network is unreachable',text):return 'Нет связи с источником. Попробуйте позже.'
+    return 'Не удалось скачать ролик. Он может быть закрыт, защищён или пока не распознаваться загрузчиком.'
 
 def read_exact(stream,n):
     data=bytearray()
@@ -33,7 +50,7 @@ def read_exact(stream,n):
 
 def read_message(stream):
     size=struct.unpack('@I',read_exact(stream,4))[0]
-    if not 0<size<=8192: raise ValueError('message size')
+    if not 0<size<=16384: raise ValueError('message size')
     msg=json.loads(read_exact(stream,size))
     if not isinstance(msg,dict): raise ValueError('message type')
     return msg
@@ -48,6 +65,7 @@ def worker(url):
     # Separate process permits real cancellation, including extractor/ffmpeg children.
     def emit(**msg): print(json.dumps(msg,ensure_ascii=False),flush=True)
     try:
+        install_public_network_guard()
         import yt_dlp
         from shutil import which
         target=Path.home()/'Downloads'/'Яндекс Видео';target.mkdir(parents=True,exist_ok=True)
@@ -65,17 +83,22 @@ def worker(url):
             def warning(self,*a): pass
             def error(self,*a): pass
         ffmpeg=next((p for p in [which('ffmpeg'),'/opt/homebrew/bin/ffmpeg','/usr/local/bin/ffmpeg'] if p and Path(p).is_file()),None)
+        protocol="[protocol~='^(https?|m3u8(_native)?|http_dash_segments)$']"
         opts={'quiet':True,'no_warnings':True,'logger':Quiet(),'noplaylist':True,'playlistend':1,
               'socket_timeout':25,'retries':2,'fragment_retries':2,'continuedl':True,
               'outtmpl':str(target/'%(title).140B [%(id)s].%(ext)s'),'restrictfilenames':False,
               'windowsfilenames':True,'overwrites':False,'progress_hooks':[progress],
-              'format':'bv*[height<=1080]+ba/b[height<=1080]/b' if ffmpeg else 'b[height<=1080]/b',
+              'format':f'bv*[height<=1080]{protocol}+ba{protocol}/b[height<=1080]{protocol}/b{protocol}' if ffmpeg else f'b[height<=1080]{protocol}/b{protocol}',
+              'enable_file_urls':False,'hls_prefer_native':True,'external_downloader':{'default':'native'},
               'merge_output_format':'mp4','max_filesize':4*1024**3,'match_filter':lambda info,**kw: 'Прямые эфиры не поддерживаются' if info.get('is_live') else None}
         if ffmpeg: opts['ffmpeg_location']=str(Path(ffmpeg).parent)
+        node=next((p for p in [which('node'),'/opt/homebrew/bin/node','/usr/local/bin/node'] if p and Path(p).is_file()),None)
+        if node:opts['js_runtimes']={'node':{'path':node}}
         emit(status='progress',text='Получение полного видео…')
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info=ydl.extract_info(url,download=True)
-            if not info or info.get('_type') in ('playlist','multi_video'): raise ValueError('no single video')
+            info=ydl.extract_info(url,download=False)
+            if not info or info.get('_type') in ('playlist','multi_video'): raise ValueError('multiple videos: choose a video card')
+            info=ydl.process_ie_result(info,download=True)
             # Completion requires an actual complete media file, not only a finished fragment.
             expected=Path(ydl.prepare_filename(info))
             candidates=[Path(info['filepath'])] if info.get('filepath') else []
@@ -84,8 +107,8 @@ def worker(url):
             if not file: raise ValueError('no output')
             emit(status='done',text='Сохранено в Загрузки/Яндекс Видео',filename=file.name)
         return 0
-    except Exception:
-        emit(status='error',text='Не удалось скачать ролик. Источник может требовать вход, ограничивать доступ или пока не поддерживаться.');return 1
+    except Exception as exc:
+        emit(status='error',text=error_message(exc));return 1
 
 def main():
     if len(sys.argv)>1 and sys.argv[1]=='--worker':
@@ -95,7 +118,7 @@ def main():
     try: msg=read_message(input_stream)
     except (EOFError,ValueError,json.JSONDecodeError): return 2
     if msg.get('action')=='ping':
-        send({'status':'ready','version':'1.2.0'});return 0
+        send({'status':'ready','version':'2.0.0'});return 0
     if msg.get('action')=='open-folder':
         try:
             target=Path.home()/'Downloads'/'Яндекс Видео'

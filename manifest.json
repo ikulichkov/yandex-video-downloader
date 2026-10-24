@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Яндекс Видео — Скачать",
-  "version": "1.2.0",
-  "description": "Кнопки скачивания в поиске и плеере Яндекс Видео, а также на страницах VK Видео.",
+  "name": "Видео — Скачать",
+  "version": "2.0.0",
+  "description": "Кнопки скачивания у видеокарточек, текущий ролик в окне расширения и настройка размещения.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr8bLGxPnygT17pgrEFzR120st7nOjUn7PwTJfRQGt3TNBViYeguKoPt5NCe7aqKzVIaibCWBw8lM7DPmA+7j9rvqrnvvqOfvm6EBCSb3jPh8C+uQ7xgJXOBWDm4Mai1xXO1r7IjkqBDOdM/EAW5kRwcyj9AxaJ7FHVl0JKRyg/rQkIMteOAWVNBeo0Pe9K0b5jjAAbaizw8Vy5973aCD06G/UmRyIjh+PfR6cyORSO0ldpCFyiuCkwNqVdqphFFw8W533ZpbFs3lvhWmz0HtI5ZpthLASG5vKxvLuY2C0t/7zQYmR+tc9TJWBsHjmZA3V3nn063FSw1lR02MXipVaQIDAQAB",
   "permissions": [
-    "nativeMessaging"
+    "nativeMessaging",
+    "storage"
   ],
   "background": {
     "service_worker": "background.js"
@@ -13,11 +14,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://ya.ru/video/*",
-        "https://yandex.ru/video/*",
-        "https://*.yandex.ru/video/*",
-        "https://vkvideo.ru/*",
-        "https://vk.com/video*"
+        "http://*/*",
+        "https://*/*"
       ],
       "js": [
         "cards.js",

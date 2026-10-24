@@ -1,19 +1,13 @@
 const jobs = new Map();
 const HOST = 'ru.local.yandex_video_downloader';
-const allowedPage = value => {
-  try {
-    const u=new URL(value);
-    if(u.protocol!=='https:'||u.username||u.password||u.port) return false;
-    if((u.hostname==='ya.ru'||u.hostname==='yandex.ru'||u.hostname.endsWith('.yandex.ru'))&&u.pathname.startsWith('/video/')) return true;
-    return u.hostname==='vkvideo.ru' || (u.hostname==='vk.com' && Boolean(YVD.sourceURL(value)));
-  }catch{return false;}
-};
+const allowedPage = value => Boolean(YVD.publicURL(value));
 importScripts('cards.js');
 function notify(job, state) {
   job.state={url:job.url,...state};
   chrome.tabs.sendMessage(job.tab,{type:'yvd-state',...job.state}).catch(()=>{});
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
+  if(sender.id!==chrome.runtime.id)return;
   if(['yvd-helper-status','yvd-open-folder'].includes(msg.type)) {
     if(sender.id!==chrome.runtime.id || sender.url!==chrome.runtime.getURL('popup.html')) return;
     const action=msg.type==='yvd-helper-status'?'ping':'open-folder';
@@ -29,7 +23,7 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
     return;
   }
   if(msg.type!=='yvd-start') return;
-  const url=YVD.sourceURL(msg.url);
+  const url=YVD.publicURL(msg.url);
   if(!url){reply({error:'Не найден поддерживаемый исходный ролик.'});return;}
   if(jobs.get(url)?.active){reply({error:'Это видео уже скачивается.'});return;}
   if([...jobs.values()].filter(j=>j.active).length>=2){reply({error:'Уже скачиваются два видео. Дождитесь завершения.'});return;}

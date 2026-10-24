@@ -18,29 +18,73 @@
     } catch { return null; }
   }
   function extract(card) {
-    for (const a of card.querySelectorAll('a[href]')) {
-      const url=sourceURL(a.href);
-      if(url) return {url,title:(card.querySelector('.VideoSnippet-Title, .VideoViewer-DetailsTitle, [data-testid="video_card_title"]')?.textContent||a.title||'Видео').trim().slice(0,200)};
+    let fallback=null;
+    const title=a=>(card.querySelector('.VideoSnippet-Title, .VideoViewer-DetailsTitle, [data-testid="video_card_title"]')?.textContent||a.title||'Видео').trim().slice(0,200);
+    for(const a of card.querySelectorAll('a[href]')){
+      const url=sourceURL(a.href);if(url)return {url,title:title(a)};
+      const generic=videoURL(a.href);
+      if(generic){const host=new URL(generic).hostname;if(host!=='ya.ru'&&host!=='yandex.ru'&&!host.endsWith('.yandex.ru'))fallback ||= {url:generic,title:title(a)};}
     }
-    return null;
+    return fallback;
   }
+  function publicURL(value) {
+    try {
+      const u=new URL(value);
+      if(!['http:','https:'].includes(u.protocol)||u.username||u.password||!u.hostname) return null;
+      const host=u.hostname.toLowerCase().replace(/^\[|\]$/g,'');
+      if(host==='localhost'||/\.(local|localhost|internal|invalid)$/.test(host)||/^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)||host==='::1'||host==='0.0.0.0')return null;
+      return u.href;
+    }catch{return null;}
+  }
+  function videoURL(value) {
+    const url=publicURL(value);if(!url)return null;
+    const u=new URL(url);
+    if(/^\/(?:video|videos)\/(?:search|trends|feed|catalog)\/?$/.test(u.pathname))return null;
+    if(/\.(mp4|webm|mov|m4v|m3u8|mpd)(?:$|[?#])/i.test(url))return url;
+    return sourceURL(url)||((/\/(?:video(?:embed)?|videos|watch|clip|clips|movie|embed|player)(?:\/|-)[^/?#]+/i.test(u.pathname)||/\/(?:watch|player)$/.test(u.pathname)&&/[?&](?:v|video|clip|movie|id)=/.test(u.search))?url:null);
+  }
+  function pageTitle(doc){return (doc.querySelector?.('meta[property="og:title"]')?.content||doc.title||'Видео').slice(0,200);}
   function currentVideo(doc, pageURL) {
-    let page;
-    try { page=new URL(pageURL); } catch { return null; }
-    if (['vkvideo.ru','vk.com'].includes(page.hostname)) {
-      const url=sourceURL(page.href);
-      return url ? {url,title:(doc.querySelector('meta[property="og:title"]')?.content || doc.title || 'Видео').slice(0,200)} : null;
-    }
-    if ((page.hostname==='ya.ru'||page.hostname==='yandex.ru'||page.hostname.endsWith('.yandex.ru')) && /^\/video\/preview\/\d+/.test(page.pathname)) {
-      // Scope to player details. Related cards have their own unrelated sources.
-      for (const details of doc.querySelectorAll('.VideoViewer-Details')) {
-        if (!details.getClientRects().length) continue;
-        const info=extract(details);
-        if (info) return info;
+    let page;try{page=new URL(pageURL);}catch{return null;}
+    if((page.hostname==='ya.ru'||page.hostname==='yandex.ru'||page.hostname.endsWith('.yandex.ru'))&&/^\/video\/preview\/\d+/.test(page.pathname)){
+      for(const details of doc.querySelectorAll('.VideoViewer-Details')){
+        if(!details.getClientRects().length)continue;
+        const info=extract(details);if(info)return info;
       }
+      return null;
     }
+    if(!publicURL(pageURL))return null;
+    if(videoURL(pageURL)||doc.querySelector?.('meta[property="og:video"],meta[property="og:video:url"],meta[property="og:video:secure_url"]'))return {url:page.href,title:pageTitle(doc)};
+    const video=doc.querySelector?.('video');
+    if(video){const src=publicURL(video.currentSrc||video.src||video.querySelector?.('source[src]')?.src);return {url:src||page.href,title:pageTitle(doc)};}
+    const frame=doc.querySelector?.('iframe[src*="/embed/"],iframe[src*="/videoembed/"],iframe[src*="/player/"]');
+    if(frame&&videoURL(frame.src))return {url:videoURL(frame.src),title:pageTitle(doc)};
     return null;
   }
-  root.YVD = {sourceURL,extract,currentVideo};
+  function genericCards(doc) {
+    const found=new Map();let checked=0;
+    for(const anchor of doc.querySelectorAll('a[href]')){
+      if(++checked>3000||found.size>=150)break;
+      const url=videoURL(anchor.href);if(!url||anchor.closest?.('.yvd-tools,.VideoSnippet,[data-testid="video_card_layout"]'))continue;
+      if(!anchor.getClientRects?.().length)continue;
+      let node=anchor.parentElement,chosen=null;
+      for(let depth=0;node&&depth<4;depth++,node=node.parentElement){
+        if(['BODY','HTML'].includes(node.tagName))break;
+        if(!node.querySelector('img,picture,video'))continue;
+        const urls=new Set(Array.from(node.querySelectorAll('a[href]')).map(a=>videoURL(a.href)).filter(Boolean));
+        const rect=node.getBoundingClientRect();
+        if(urls.size!==1||rect.height>600||rect.width>1100)break;
+        chosen=node;
+      }
+      if(chosen)found.set(chosen,{url,title:(anchor.title||anchor.textContent?.trim()||chosen.querySelector('img')?.alt||'Видео').slice(0,200)});
+    }
+    const videos=Array.from(doc.querySelectorAll('video')).filter(v=>v.getClientRects?.().length);
+    if(videos.length>1)for(const video of videos){
+      const url=publicURL(video.currentSrc||video.src);const element=video.parentElement;
+      if(url&&element&&!video.closest?.('.VideoSnippet,[data-testid="video_card_layout"],a'))found.set(element,{url,title:video.title||pageTitle(doc)});
+    }
+    return Array.from(found,([element,info])=>({element,info}));
+  }
+  root.YVD = {sourceURL,extract,publicURL,videoURL,currentVideo,genericCards};
   if(typeof module !== 'undefined') module.exports=root.YVD;
 })(typeof globalThis!=='undefined'?globalThis:this);

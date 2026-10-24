@@ -18,6 +18,17 @@ with tempfile.TemporaryDirectory() as tmp:
   assert host.main()==0
   assert run.call_args.args[0]==['/usr/bin/open',str(Path(tmp)/'Downloads'/'Яндекс Видео')]
  assert host.read_message(io.BytesIO(output.getvalue()))['status']=='done'
-for bad in ['http://ok.ru/video/1','https://ok.ru.evil.test/video/1','file:///tmp/x','https://ok.ru:123/video/1']:assert not host.valid_url(bad)
+for bad in ['http://127.0.0.1/video/1','https://localhost/video/1','file:///tmp/x','https://u:p@ok.ru/video/1','https://192.168.1.1/video/1']:assert not host.valid_url(bad)
 assert host.valid_url('https://vkvideo.ru/video-234113842_456242445')
 print('Native origin, ping, unknown commands, fixed-folder confinement, URL validation PASS')
+
+assert host.valid_url('https://example.com/some/public/page')
+assert host.valid_url('http://ok.ru/video/1')
+# Validate resolved addresses, not only textual hostnames; redirects use the same guard.
+with patch.object(host.socket,'getaddrinfo',return_value=[(2,1,6,'',('127.0.0.1',443))]):
+ host.install_public_network_guard()
+ try:host.socket.getaddrinfo('example.com',443)
+ except OSError:pass
+ else:raise AssertionError('private DNS resolution was accepted')
+with patch.object(host.socket,'getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
+ host.install_public_network_guard();assert host.socket.getaddrinfo('example.com',443)
