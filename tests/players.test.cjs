@@ -42,8 +42,11 @@ test('worker accepts exact VK video and Yandex; rejects other senders; keeps pro
  ports[0].onMessage.listeners[0]({status:'done',filename:'file.mp4'});assert.equal(sent.at(-1).status,'done');
  assert.ok(send('yvd-start',dzen,'https://ya.ru/video/preview/1').ok);
 });
+function findUI(node,id){if(node.id===id)return node;for(const child of [...node.children,...(node.shadowRoot?[node.shadowRoot]:[])]){const found=findUI(child,id);if(found)return found;}return undefined;}
+function cardControls(body){return body.children.flatMap(h=>h.shadowRoot?.children||[]).filter(x=>(x.className||'').split(' ').includes('card'));}
 class El{
  constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.listeners={};this.attrs={};this.parent=null;}
+ attachShadow(){this.shadowRoot=new El('shadow');return this.shadowRoot;}
  append(...items){for(const x of items){x.parent=this;this.children.push(x)}}
  replaceChildren(){this.children=[]}
  setAttribute(k,v){this.attrs[k]=v}
@@ -52,7 +55,7 @@ class El{
 }
 test('current-video panel updates across SPA routes, sends exact URL, and removes on leaving video',async()=>{
  const body=new El('body'),requests=[],loc={href:vk};let interval,receive;
- const doc={body,title:'VK current',createElement:tag=>new El(tag),getElementById:id=>body.children.find(e=>e.id===id),querySelector:()=>null,querySelectorAll:()=>[]};
+ const doc={body,title:'VK current',createElement:tag=>new El(tag),getElementById:id=>findUI(body,id),querySelector:()=>null,querySelectorAll:()=>[]};
  const chrome={runtime:{onMessage:{addListener:f=>receive=f},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?[]:{ok:true}}}};
  let storageChanged;const prefs={placement:'top-left',showCurrentPanel:true};chrome.storage={local:{get:async()=>prefs},onChanged:{addListener:f=>storageChanged=f}};
  const context={document:doc,location:loc,chrome,YVD,Element:El,Map,JSON,MutationObserver:class{observe(){}},window:{addEventListener(){}},setInterval:f=>interval=f,setTimeout,clearTimeout};
@@ -64,9 +67,9 @@ test('current-video panel updates across SPA routes, sends exact URL, and remove
  receive({type:'yvd-state',url:vk,status:'progress',text:'50%'});
  button=panel.children.find(x=>x.tag==='button');assert.equal(button.textContent,'Отменить');
  await button.listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.at(-1).type,'yvd-cancel');
- loc.href='https://vkvideo.ru/video-123_456';interval();panel=doc.getElementById('yvd-current');assert.equal(body.children.length,1);
+ loc.href='https://vkvideo.ru/video-123_456';interval();await new Promise(r=>setTimeout(r,450));panel=doc.getElementById('yvd-current');assert.equal(body.children.length,1);
  button=panel.children.find(x=>x.tag==='button');await button.listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.at(-1).url,loc.href);
- loc.href='https://vkvideo.ru/';interval();assert.equal(doc.getElementById('yvd-current'),undefined);
+ loc.href='https://vkvideo.ru/';interval();await new Promise(r=>setTimeout(r,450));assert.equal(doc.getElementById('yvd-current'),undefined);
  loc.href=vk;prefs.showCurrentPanel=false;storageChanged({showCurrentPanel:{newValue:false}},'local');await Promise.resolve();assert.equal(doc.getElementById('yvd-current'),undefined);
  prefs.showCurrentPanel=true;storageChanged({showCurrentPanel:{newValue:true}},'local');await Promise.resolve();assert.ok(doc.getElementById('yvd-current'));
 });
@@ -89,19 +92,19 @@ test('VK sidebar controls use their own card, do not navigate player, and surviv
  }
  const first=makeCard('https://vkvideo.ru/video-234113842_456242432','Боковой ролик');cards.push(first.card);
  const loc={href:vk};
- const doc={body,title:'Основной ролик',createElement:tag=>new El(tag),getElementById:id=>body.children.find(e=>e.id===id),querySelector:()=>null,querySelectorAll:s=>s.includes('video_card_layout')?cards:[]};
+ const doc={body,title:'Основной ролик',createElement:tag=>new El(tag),getElementById:id=>findUI(body,id),querySelector:()=>null,querySelectorAll:s=>s.includes('video_card_layout')?cards:[]};
  const chrome={runtime:{onMessage:{addListener:f=>receive=f},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?[]:{ok:true}}}};
  vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,location:loc,chrome,YVD,Element:El,Map,JSON,MutationObserver:class{constructor(f){changed=f}observe(){}},window:{addEventListener(){}},setInterval(){},setTimeout(f){f();return 0},clearTimeout(){}});
  await Promise.resolve();
- assert.equal(first.card.children.filter(x=>x.className==='yvd-tools').length,1);
- let ui=first.card.children.find(x=>x.className==='yvd-tools'),button=ui.children.find(x=>x.tag==='button');
+ assert.equal(first.card.children.length,1);assert.equal(cardControls(body).length,1);
+ let ui=cardControls(body)[0],button=ui.children.find(x=>x.tag==='button');
  await button.listeners.click({preventDefault(){},stopPropagation(){}});
  assert.equal(requests.at(-1).url,first.card.url);assert.equal(loc.href,vk);
  receive({type:'yvd-state',url:first.card.url,status:'progress',text:'50%'});
- assert.equal(first.card.children.filter(x=>x.className==='yvd-tools').length,1);assert.equal(first.card.children.find(x=>x.className==='yvd-tools').children.find(x=>x.tag==='button').textContent,'Отменить');
+ assert.equal(first.card.children.length,1);assert.equal(cardControls(body).length,1);assert.equal(cardControls(body)[0].children.find(x=>x.tag==='button').textContent,'Отменить');
  const second=makeCard('https://vkvideo.ru/video-123_999','Подгруженный ролик');cards.push(second.card);changed([{target:{}}]);
- assert.equal(first.card.children.filter(x=>x.className==='yvd-tools').length,1);assert.equal(second.card.children.filter(x=>x.className==='yvd-tools').length,1);
- button=second.card.children.find(x=>x.className==='yvd-tools').children.find(x=>x.tag==='button');await button.listeners.click({preventDefault(){},stopPropagation(){}});
+ assert.equal(first.card.children.length,1);assert.equal(second.card.children.length,1);assert.equal(cardControls(body).length,2);
+ button=cardControls(body)[1].children.find(x=>x.tag==='button');await button.listeners.click({preventDefault(){},stopPropagation(){}});
  assert.equal(requests.at(-1).url,second.card.url);assert.equal(loc.href,vk);
 });
 test('popup native commands require exact own popup sender, never accept an input path',async()=>{
@@ -150,9 +153,18 @@ test('generic current video supports Mail, OK, direct HTML5 media and rejects lo
  for(const url of ['file:///tmp/a','https://u:p@example.com/video/1','http://127.0.0.1/video/1','http://192.168.1.1/clip.mp4'])assert.equal(YVD.publicURL(url),null);
 });
 test('floating current panel is off by default while popup still receives current video',async()=>{
- const body=new El('body'),doc={body,title:'Current',createElement:tag=>new El(tag),getElementById:id=>body.children.find(e=>e.id===id),querySelector:()=>null,querySelectorAll:()=>[]};let listener;
+ const body=new El('body'),doc={body,title:'Current',createElement:tag=>new El(tag),getElementById:id=>findUI(body,id),querySelector:()=>null,querySelectorAll:()=>[]};let listener;
  const chrome={runtime:{id:'self',getURL:p=>'chrome-extension://self/'+p,onMessage:{addListener:f=>listener=f},sendMessage:async()=>[]}};
  vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,location:{href:vk},chrome,YVD,Element:El,Map,JSON,MutationObserver:class{observe(){}},window:{addEventListener(){}},setInterval(){},setTimeout,clearTimeout});await Promise.resolve();
  assert.equal(doc.getElementById('yvd-current'),undefined);let reply;
  listener({type:'yvd-page-info'},{id:'self',url:chrome.runtime.getURL('popup.html')},r=>reply=r);assert.equal(reply.current.url,vk);
+});
+test('generic detection skips off-screen cards, navigation and current-video links',()=>{
+ const card={tagName:'ARTICLE',parentElement:{tagName:'BODY'},querySelector:()=>({alt:'thumb'}),getBoundingClientRect:()=>({width:320,height:200})};
+ const a={href:'https://example.com/video/42',title:'Video',textContent:'Video',getClientRects:()=>[{}],getBoundingClientRect:()=>({top:4000,bottom:4200}),closest:()=>null,parentElement:card};card.querySelectorAll=()=>[a];
+ const doc={URL:'https://example.com/video/1',querySelectorAll:s=>s==='a[href]'?[a]:[]};
+ assert.equal(YVD.genericCards(doc).length,0);
+ a.getBoundingClientRect=()=>({top:0,bottom:200});a.href=doc.URL;assert.equal(YVD.genericCards(doc).length,0);
+ a.href='https://example.com/video/42';a.textContent='Войти';assert.equal(YVD.genericCards(doc).length,0);
+ a.textContent='Video';a.closest=()=>({tagName:'NAV'});assert.equal(YVD.genericCards(doc).length,0);
 });

@@ -64,9 +64,14 @@
   function genericCards(doc) {
     const found=new Map();let checked=0;
     for(const anchor of doc.querySelectorAll('a[href]')){
-      if(++checked>3000||found.size>=150)break;
+      if(++checked>3000||found.size>=40)break;
       const url=videoURL(anchor.href);if(!url||anchor.closest?.('.yvd-tools,.VideoSnippet,[data-testid="video_card_layout"]'))continue;
       if(!anchor.getClientRects?.().length)continue;
+      if(anchor.closest?.('header,nav,form,[role="navigation"],[role="banner"]'))continue;
+      if(/^(войти|войдите|зарегистр|sign in|log in|login|register)/i.test((anchor.textContent||'').trim()))continue;
+      if(doc.URL){const page=new URL(doc.URL),video=new URL(url);const same=page.origin===video.origin&&page.pathname===video.pathname&&['v','id','video','clip','movie'].every(k=>page.searchParams.get(k)===video.searchParams.get(k));if(same)continue;}
+      const anchorRect=anchor.getBoundingClientRect?.();
+      if(anchorRect&&(anchorRect.bottom<0||anchorRect.top>(typeof innerHeight==='number'?innerHeight:2000)+100))continue;
       let node=anchor.parentElement,chosen=null;
       for(let depth=0;node&&depth<4;depth++,node=node.parentElement){
         if(['BODY','HTML'].includes(node.tagName))break;
