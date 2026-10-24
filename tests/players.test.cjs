@@ -250,3 +250,29 @@ test('persisted active downloads become interrupted rather than claiming to run 
  const jobs=await new Promise(resolve=>chrome.runtime.onMessage.listeners[0]({type:'yvd-downloads'},{id,url:chrome.runtime.getURL('popup.html')},resolve));
  assert.equal(jobs[0].status,'error');assert.ok(jobs[0].text.includes('перезапуском'));
 });
+
+test('downloaded memory survives restart/new tabs and history removal; trash clears the mark',async()=>{
+ const id='memory';let saved={downloadHistory:[{url:vk,title:'Saved',status:'done',filename:'/fixed/video.mp4'}]};
+ function boot(){
+  const chrome={runtime:{id,getURL:p=>'chrome-extension://'+id+'/'+p,onMessage:event(),sendNativeMessage:async()=>({status:'done'})},tabs:{onRemoved:event()},storage:{local:{get:async()=>JSON.parse(JSON.stringify(saved)),set:async x=>saved={...saved,...JSON.parse(JSON.stringify(x))}}}};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../background.js'),'utf8'),{chrome,YVD,Map,Date,importScripts(){}});
+  return (msg,popup=false)=>new Promise(resolve=>chrome.runtime.onMessage.listeners[0](msg,popup?{id,url:chrome.runtime.getURL('popup.html')}:{id,url:'https://yandex.ru/video/search?text=test',tab:{id:99}},resolve));
+ }
+ let call=boot();let states=await call({type:'yvd-status'});assert.equal(states[0].downloaded,true);
+ await call({type:'yvd-remove-job',url:vk},true);assert.equal((await call({type:'yvd-status'}))[0].downloaded,true);
+ call=boot();states=await call({type:'yvd-status'});assert.equal(states[0].url,vk);assert.equal(states[0].downloaded,true);
+ saved.downloadHistory=[{url:vk,title:'Saved',status:'done',filename:'/fixed/video.mp4'}];call=boot();
+ await call({type:'yvd-remove-job',url:vk,trashFile:true},true);assert.equal((await call({type:'yvd-status'})).length,0);
+ call=boot();assert.equal((await call({type:'yvd-status'})).length,0);
+});
+
+test('saved card has a compact green check and still permits another download',async()=>{
+ const body=new El('body'),requests=[],url='https://ok.ru/video/99';let receive,storageChanged,list=[{url,status:'done',downloaded:true}];
+ const card=new El('div');card.querySelectorAll=()=>[];
+ const doc={body,title:'test',createElement:t=>new El(t),querySelectorAll:()=>[],querySelector:()=>null};
+ const chrome={runtime:{onMessage:{addListener:f=>receive=f},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?list:{ok:true}}},storage:{local:{get:async()=>({placement:'top-left',showCurrentPanel:false})},onChanged:{addListener:f=>storageChanged=f}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,location:{href:vk},chrome,YVD:{...YVD,genericCards:()=>[{element:card,info:{url,title:'Saved card'}}]},Map,JSON,MutationObserver:class{observe(){}},window:{addEventListener(){}},setInterval(){},setTimeout,clearTimeout});
+ await new Promise(r=>setImmediate(r));let button=cardControls(body)[0].children.find(x=>x.tag==='button');assert.equal(button.textContent,'✓');assert.equal(button.className,'downloaded');assert.ok(button.attrs['aria-label'].includes('Скачать ещё'));
+ await button.listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.at(-1).type,'yvd-start');
+ list=[];storageChanged({downloadedVideos:{newValue:[]}},'local');await new Promise(r=>setImmediate(r));button=cardControls(body)[0].children.find(x=>x.tag==='button');assert.equal(button.textContent,'↓');assert.notEqual(button.className,'downloaded');
+});

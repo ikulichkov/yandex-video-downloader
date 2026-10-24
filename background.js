@@ -1,19 +1,27 @@
 const jobs=new Map();
+const downloaded=new Map();
 const HOST='ru.local.yandex_video_downloader';
 importScripts('cards.js','updates.js');
 const allowedPage=value=>Boolean(YVD.publicURL(value));
 const terminal=s=>['done','error','cancelled','removed'].includes(s);
 const snapshot=j=>({url:j.url,title:j.title||'Видео',quality:j.quality||'best',createdAt:j.createdAt,...j.state});
-function persist(){chrome.storage?.local?.set({downloadHistory:[...jobs.values()].slice(-100).map(snapshot)}).catch(()=>{});}
-const historyReady=(chrome.storage?.local?.get('downloadHistory')||Promise.resolve({})).then(data=>{
+function persist(){historyReady.then(()=>chrome.storage?.local?.set({downloadHistory:[...jobs.values()].slice(-100).map(snapshot),downloadedVideos:[...downloaded.values()].slice(-1000)})).catch(()=>{});}
+const historyReady=(chrome.storage?.local?.get(['downloadHistory','downloadedVideos'])||Promise.resolve({})).then(data=>{
+  for(const item of (Array.isArray(data.downloadedVideos)?data.downloadedVideos:[]).slice(-1000))if(item&&YVD.publicURL(item.url))downloaded.set(item.url,{url:item.url,status:'done',downloaded:true,filename:typeof item.filename==='string'?item.filename:undefined});
   for(const item of (Array.isArray(data.downloadHistory)?data.downloadHistory:[]).slice(-100)){
-    if(!YVD.publicURL(item.url)||jobs.has(item.url))continue;
+    if(!item||!YVD.publicURL(item.url))continue;
     const state={url:item.url,status:terminal(item.status)?item.status:'error',text:terminal(item.status)?String(item.text||'').slice(0,300):'Загрузка прервана перезапуском браузера. Можно повторить.',filename:typeof item.filename==='string'?item.filename:undefined};
-    jobs.set(item.url,{url:item.url,title:String(item.title||'Видео').slice(0,200),quality:item.quality,createdAt:item.createdAt,active:false,tab:null,state});
+    if(state.status==='done')downloaded.set(item.url,{...state,downloaded:true});
+    if(!jobs.has(item.url))jobs.set(item.url,{url:item.url,title:String(item.title||'Видео').slice(0,200),quality:item.quality,createdAt:item.createdAt,active:false,tab:null,state});
   }
+  while(downloaded.size>1000)downloaded.delete(downloaded.keys().next().value);
 }).catch(()=>{});
 function notify(job,state){
-  job.state={url:job.url,...state};
+  if(state.status==='done'){
+    downloaded.delete(job.url);downloaded.set(job.url,{url:job.url,status:'done',downloaded:true,filename:state.filename});
+    while(downloaded.size>1000)downloaded.delete(downloaded.keys().next().value);
+  }
+  job.state={url:job.url,...state,downloaded:downloaded.has(job.url)};
   if(job.tab!=null)chrome.tabs.sendMessage(job.tab,{type:'yvd-state',...job.state}).catch(()=>{});
   if(terminal(state.status)||state.status==='starting')persist();
 }
@@ -63,13 +71,17 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
         if(job.state.status!=='done'||!job.state.filename){reply({error:'Нет сохранённого файла.'});return;}
         const result=await chrome.runtime.sendNativeMessage(HOST,{action:'trash-file',filename:job.state.filename});
         if(result?.status!=='done'){reply({error:result?.text||'Не удалось переместить файл в корзину.'});return;}
+        downloaded.delete(job.url);
       }
       jobs.delete(job.url);persist();reply({ok:true});
     }).catch(()=>reply({error:'Не удалось выполнить действие.'}));return true;
   }
   if(!sender.tab||!allowedPage(sender.url))return;
   const tab=sender.tab.id;
-  if(msg.type==='yvd-status'){reply([...jobs.values()].filter(j=>j.tab===tab).map(j=>j.state));return;}
+  if(msg.type==='yvd-status'){
+    const respond=()=>{const values=new Map(downloaded);for(const j of jobs.values())if(j.tab===tab)values.set(j.url,{...j.state,downloaded:downloaded.has(j.url)});reply([...values.values()]);};
+    if(!chrome.storage){respond();return;}historyReady.then(respond);return true;
+  }
   if(msg.type==='yvd-cancel'){const job=jobs.get(msg.url);if(job?.tab===tab&&job.active){job.port?.postMessage({action:'cancel'});reply({ok:true});}return;}
   if(msg.type==='yvd-start')start(msg,tab,reply);
 });

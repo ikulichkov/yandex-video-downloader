@@ -28,6 +28,7 @@
       .control{position:fixed;display:flex;flex-direction:column;align-items:flex-start;gap:4px;max-width:240px;pointer-events:none;font:12px/1.4 Arial,sans-serif;color:#eee}
       button{pointer-events:auto;cursor:pointer;border:1px solid #0003;border-radius:9px;background:#ffdc60;color:#171717;font:600 16px/1 Arial,sans-serif;min-width:28px;min-height:28px;padding:5px 8px;box-shadow:0 1px 5px #0004}
       button:hover{background:#ffe68c}button:focus-visible{outline:3px solid #75a7ff;outline-offset:2px}
+      button.downloaded{background:#62d991;color:#103a20}button.downloaded:hover{background:#8be8ae}
       .status{background:#252525;color:#f5f5f5;border-radius:5px;padding:3px 6px;overflow-wrap:anywhere;max-width:235px}.status:empty{display:none}
       .separate button,.panel button{font-size:12px;padding:8px 11px}.separate{max-width:260px}
       .panel{right:20px;bottom:20px;left:auto;top:auto;max-width:320px;padding:13px;border:1px solid #777;border-radius:13px;background:#202124;box-shadow:0 4px 20px #0006;gap:9px}
@@ -40,8 +41,11 @@
     ui.dataset.signature=signature;ui.replaceChildren();
     if(isPanel){const title=document.createElement('span');title.className='title';title.textContent=info.title;ui.append(title);}
     const button=document.createElement('button');button.type='button';
-    button.textContent=active(state)?'Отменить':isPanel?'↓ Скачать текущее видео':preferences.placement==='separate'?'↓ Скачать':'↓';
+    const saved=state?.status==='done'||state?.downloaded===true;
+    button.className=saved&&!active(state)?'downloaded':'';
+    button.textContent=active(state)?'Отменить':saved?(isPanel||preferences.placement==='separate'?'✓ Скачано · Скачать ещё':'✓'):isPanel?'↓ Скачать текущее видео':preferences.placement==='separate'?'↓ Скачать':'↓';
     button.title='Скачать '+info.title;button.setAttribute('aria-label',active(state)?'Отменить скачивание':'Скачать '+info.title);
+    if(saved&&!active(state)){button.title='Уже скачано. Скачать ещё: '+info.title;button.setAttribute('aria-label',button.title);}
     button.addEventListener('click',async e=>{
       e.preventDefault();e.stopPropagation();
       if(routeChanged()){schedule();return;}
@@ -50,7 +54,7 @@
       paint();
     });
     const status=document.createElement('span');status.className='status';status.setAttribute('aria-live','polite');
-    status.textContent=state?.status==='done'?'✓ Сохранено в Загрузки/Яндекс Видео':state?.text||'';
+    status.textContent=state?.status==='done'?(isPanel?'✓ Сохранено в Загрузки/Яндекс Видео':''):state?.text||'';
     status.title=state?.filename||status.textContent;ui.append(button,status);
   }
   function paint(){
@@ -106,10 +110,11 @@
     if(!url){reply({error:'Откройте публичную страницу с видео.'});return;}
     chrome.runtime.sendMessage({type:active(states.get(url))?'yvd-cancel':'yvd-start',url,title:current?.title||document.title,quality:preferences.quality}).then(reply).catch(()=>reply({error:'Обновите страницу видео.'}));return true;
   });
-  chrome.runtime.sendMessage({type:'yvd-status'}).then(list=>{for(const state of list||[])states.set(state.url,state);paint();}).catch(()=>{});
+  function syncStates(){chrome.runtime.sendMessage({type:'yvd-status'}).then(list=>{states.clear();for(const state of list||[])states.set(state.url,state);paint();}).catch(()=>{});}
+  syncStates();
   function apply(values){preferences={placement:placements.has(values.placement)?values.placement:defaults.placement,showCurrentPanel:values.showCurrentPanel===true,quality:['best','1080','720','480','360'].includes(values.quality)?values.quality:'best'};positionAll();paint();}
   chrome.storage?.local?.get(defaults).then(apply).catch(()=>{});
-  chrome.storage?.onChanged?.addListener((changes,area)=>{if(area==='local'&&(changes.placement||changes.showCurrentPanel||changes.quality))chrome.storage.local.get(defaults).then(apply);});
+  chrome.storage?.onChanged?.addListener((changes,area)=>{if(area!=='local')return;if(changes.placement||changes.showCurrentPanel||changes.quality)chrome.storage.local.get(defaults).then(apply);if(changes.downloadedVideos)syncStates();});
   window.addEventListener('scroll',()=>{if(scrollFrame===null){scrollFrame=requestAnimationFrame(()=>{scrollFrame=null;positionAll();});}schedule();},{passive:true});
   window.addEventListener('resize',()=>{positionAll();schedule();});window.addEventListener('popstate',schedule);
   document.addEventListener?.('loadedmetadata',schedule,true);document.addEventListener?.('load',e=>{if(e.target?.tagName==='IMG')schedule();},true);
