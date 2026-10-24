@@ -225,3 +225,28 @@ test('popup offers update archive and persists user quality',async()=>{
  elements.get('quality').value='best';await elements.get('quality').listeners.change();assert.equal(requests.at(-1).quality,'best');
  await elements.get('check-update').listeners.click();assert.equal(requests.at(-1).force,true);
 });
+
+test('download manager controls jobs across tabs, preserves downloads after tab close, gates history deletion',async()=>{
+ const id='manager',ports=[],native=[],saved=[];
+ const chrome={runtime:{id,getURL:p=>'chrome-extension://'+id+'/'+p,onMessage:event(),lastError:null,sendNativeMessage:async(h,m)=>{native.push(m);return{status:'done'}},connectNative(){const p={onMessage:event(),onDisconnect:event(),sent:[],postMessage(m){this.sent.push(m)},disconnect(){}};ports.push(p);return p}},tabs:{onRemoved:event(),sendMessage:async()=>{}},storage:{local:{get:async()=>({}),set:async x=>saved.push(x)}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../background.js'),'utf8'),{chrome,URL,YVD,Map,Date,importScripts(){}});
+ const listener=chrome.runtime.onMessage.listeners[0],popup={id,url:chrome.runtime.getURL('popup.html')},page={id,url:vk,tab:{id:4}};
+ const call=(m,sender=popup)=>new Promise(resolve=>listener(m,sender,resolve));
+ let response;listener({type:'yvd-downloads'},page,r=>response=r);assert.equal(response,undefined);
+ assert.ok((await call({type:'yvd-start',url:vk,title:'Title',quality:'720'},page)).ok);
+ chrome.tabs.onRemoved.listeners[0](4);assert.equal(ports[0].sent.length,1);
+ let jobs=await call({type:'yvd-downloads'});assert.equal(jobs[0].title,'Title');assert.equal(jobs[0].quality,'720');
+ assert.ok((await call({type:'yvd-remove-job',url:vk})).error);
+ await call({type:'yvd-cancel-job',url:vk});assert.equal(ports[0].sent.at(-1).action,'cancel');
+ ports[0].onMessage.listeners[0]({status:'cancelled'});await call({type:'yvd-retry-job',url:vk});assert.equal(ports[1].sent[0].quality,'720');
+ ports[1].onMessage.listeners[0]({status:'done',filename:'/fixed/download/video.mp4'});
+ await call({type:'yvd-remove-job',url:vk,trashFile:true});assert.equal(native[0].action,'trash-file');assert.equal(native[0].filename,'/fixed/download/video.mp4');
+ assert.equal((await call({type:'yvd-downloads'})).length,0);assert.ok(saved.length);
+});
+
+test('persisted active downloads become interrupted rather than claiming to run after worker restart',async()=>{
+ const id='restore',chrome={runtime:{id,getURL:p=>'chrome-extension://'+id+'/'+p,onMessage:event()},tabs:{onRemoved:event()},storage:{local:{get:async()=>({downloadHistory:[{url:vk,title:'Restored',status:'progress'}]})}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../background.js'),'utf8'),{chrome,URL,YVD,Map,Date,importScripts(){}});
+ const jobs=await new Promise(resolve=>chrome.runtime.onMessage.listeners[0]({type:'yvd-downloads'},{id,url:chrome.runtime.getURL('popup.html')},resolve));
+ assert.equal(jobs[0].status,'error');assert.ok(jobs[0].text.includes('перезапуском'));
+});

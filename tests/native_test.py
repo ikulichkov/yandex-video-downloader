@@ -64,3 +64,15 @@ for quality in ['best','1080','720','480','360']:
 try:host.format_selector('1080]+exec',True)
 except ValueError:pass
 else:raise AssertionError('unvalidated quality')
+
+# Trash accepts only non-symlink files immediately within the fixed download folder.
+with tempfile.TemporaryDirectory() as tmp:
+ target=Path(tmp)/'Downloads'/'Яндекс Видео';target.mkdir(parents=True);good=target/'video.mp4';good.write_bytes(b'video')
+ outside=Path(tmp)/'outside.mp4';outside.write_bytes(b'outside')
+ link=target/'link.mp4';link.symlink_to(outside)
+ for file,expected in [(good,'done'),(outside,'error'),(link,'error')]:
+  output=io.BytesIO();calls=[]
+  with patch.object(sys,'argv',[str(root/'native/host.py'),origin]),patch.object(host.os,'dup',return_value=0),patch.object(host.os,'fdopen',return_value=io.BytesIO(frame({'action':'trash-file','filename':str(file)}))),patch.object(Path,'home',return_value=Path(tmp)),patch.dict(sys.modules,{'send2trash':SimpleNamespace(send2trash=lambda f:calls.append(f))}),patch.object(sys,'stdout') as stdout:
+   stdout.buffer=output;host.main()
+  assert host.read_message(io.BytesIO(output.getvalue()))['status']==expected
+  assert bool(calls)==(expected=='done')

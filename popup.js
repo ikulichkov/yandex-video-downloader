@@ -1,6 +1,6 @@
 (() => {
   const el=id=>document.getElementById(id);
-  let tabId=null,helperReady=false,page=null;
+  let tabId=null,helperReady=false,page=null,downloadsSignature='';
   const busy=s=>['starting','progress','processing'].includes(s?.status);
   function render(){
     const current=page?.current,state=page?.state,canTry=Boolean(current||page?.page?.url);
@@ -17,11 +17,11 @@
   }
   async function checkHelper(){
     el('helper').textContent='Проверяю помощник…';el('check-helper').disabled=true;
-    try{const result=await chrome.runtime.sendMessage({type:'yvd-helper-status'});helperReady=result?.status==='ready';}
-    catch{helperReady=false;}
+    try{const result=await chrome.runtime.sendMessage({type:'yvd-helper-status'});helperReady=result?.status==='ready';if(el('helper-hint'))el('helper-hint').textContent=helperReady?'':result?.text||'Установите локальный помощник: Windows — install-windows.cmd, macOS — install.command из архива расширения.';}
+    catch{helperReady=false;if(el('helper-hint'))el('helper-hint').textContent='Нет связи с локальным помощником. Windows: install-windows.cmd; macOS: install.command из архива расширения.';}
     el('helper').textContent=helperReady?'● Помощник готов':'● Помощник недоступен';
     el('helper').className=helperReady?'ready':'error';el('check-helper').disabled=false;
-    el('folder').disabled=!helperReady;render();
+    el('folder').disabled=!helperReady;if(el('install-helper'))el('install-helper').hidden=helperReady;render();
   }
   el('download').addEventListener('click',async()=>{
     if(tabId===null)return;
@@ -60,5 +60,27 @@
   }
   if(el('check-update')){el('check-update').addEventListener('click',()=>checkUpdate(true));checkUpdate();}
   checkHelper();
-  setInterval(readPage,1000);
+  async function readDownloads(){
+    const list=el('downloads');if(!list)return;
+    try{
+      const jobs=await chrome.runtime.sendMessage({type:'yvd-downloads'});if(!Array.isArray(jobs))return;
+      const signature=JSON.stringify(jobs);if(signature===downloadsSignature)return;downloadsSignature=signature;list.replaceChildren();
+      if(!jobs.length){list.textContent='Загрузок пока нет.';return;}list.textContent='';
+      for(const job of jobs){
+        const row=document.createElement('div');row.className='download-item';
+        const title=document.createElement('p');title.textContent=job.title||'Видео';row.append(title);
+        const state=document.createElement('p');state.className='muted';state.textContent=job.status==='done'?'✓ Сохранено':job.status==='cancelled'?'Остановлено':job.text||job.status;row.append(state);
+        const actions=document.createElement('div');actions.className='download-actions';
+        function action(label,type,extra={}){const button=document.createElement('button');button.textContent=label;button.addEventListener('click',async()=>{button.disabled=true;try{const result=await chrome.runtime.sendMessage({type,url:job.url,...extra});el('downloads-status').textContent=result?.error||'';downloadsSignature='';await readDownloads();}catch{el('downloads-status').textContent='Не удалось выполнить действие.';}finally{button.disabled=false;}});actions.append(button);}
+        if(busy(job))action('Остановить','yvd-cancel-job');
+        else{
+          if(job.status!=='done')action('Повторить','yvd-retry-job');
+          action('Убрать из списка','yvd-remove-job');
+          if(job.status==='done'&&job.filename)action('Файл в корзину','yvd-remove-job',{trashFile:true});
+        }
+        row.append(actions);list.append(row);
+      }
+    }catch{el('downloads-status').textContent='Не удалось получить список загрузок.';}
+  }
+  readDownloads();setInterval(()=>{readDownloads();return readPage();},1000);
 })();

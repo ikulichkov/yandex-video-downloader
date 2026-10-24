@@ -93,6 +93,11 @@ def worker(url, quality='best'):
             def warning(self,*a): pass
             def error(self,*a): pass
         ffmpeg=next((p for p in [which('ffmpeg'),'/opt/homebrew/bin/ffmpeg','/usr/local/bin/ffmpeg'] if p and Path(p).is_file()),None)
+        if not ffmpeg:
+            try:
+                import imageio_ffmpeg
+                ffmpeg=imageio_ffmpeg.get_ffmpeg_exe()
+            except (ImportError,RuntimeError): pass
         opts={'quiet':True,'no_warnings':True,'logger':Quiet(),'noplaylist':True,'playlistend':1,
               'socket_timeout':25,'retries':2,'fragment_retries':2,'continuedl':True,
               'outtmpl':str(target/'%(title).140B [%(id)s] [%(height)sp].%(ext)s'),'restrictfilenames':False,
@@ -100,7 +105,7 @@ def worker(url, quality='best'):
               'format':format_selector(quality,ffmpeg),
               'enable_file_urls':False,'hls_prefer_native':True,'external_downloader':{'default':'native'},
               'merge_output_format':'mp4','match_filter':lambda info,**kw: 'Прямые эфиры не поддерживаются' if info.get('is_live') else None}
-        if ffmpeg: opts['ffmpeg_location']=str(Path(ffmpeg).parent)
+        if ffmpeg: opts['ffmpeg_location']=str(ffmpeg)
         node=next((p for p in [which('node'),'/opt/homebrew/bin/node','/usr/local/bin/node'] if p and Path(p).is_file()),None)
         if node:opts['js_runtimes']={'node':{'path':node}}
         emit(status='progress',text='Получение полного видео…')
@@ -122,29 +127,45 @@ def worker(url, quality='best'):
 def main():
     if len(sys.argv)>1 and sys.argv[1]=='--worker':
         return worker(sys.argv[2],sys.argv[3] if len(sys.argv)==4 else 'best') if len(sys.argv) in (3,4) and valid_url(sys.argv[2]) and (len(sys.argv)==3 or sys.argv[3] in ('best','1080','720','480','360')) else 2
-    if len(sys.argv)!=2 or sys.argv[1]!=f'chrome-extension://{EXT_ID}/': return 2
+    if len(sys.argv)<2 or sys.argv[1]!=f'chrome-extension://{EXT_ID}/' or any(not x.startswith('--parent-window=') for x in sys.argv[2:]): return 2
+    if sys.platform=='win32':
+        import msvcrt
+        msvcrt.setmode(sys.stdin.fileno(),os.O_BINARY);msvcrt.setmode(sys.stdout.fileno(),os.O_BINARY)
     input_stream=os.fdopen(os.dup(sys.stdin.fileno()), 'rb', buffering=0)
     try: msg=read_message(input_stream)
     except (EOFError,ValueError,json.JSONDecodeError): return 2
     if msg.get('action')=='ping':
-        send({'status':'ready','version':'2.1.0'});return 0
+        send({'status':'ready','version':'2.2.0'});return 0
     if msg.get('action')=='open-folder':
         try:
             target=Path.home()/'Downloads'/'Яндекс Видео'
             target.mkdir(parents=True,exist_ok=True)
-            result=subprocess.run(['/usr/bin/open',str(target)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
-            send({'status':'done' if result.returncode==0 else 'error'});return 0
+            if sys.platform=='win32': os.startfile(str(target));result_code=0
+            else: result_code=subprocess.run(['/usr/bin/open',str(target)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10).returncode
+            send({'status':'done' if result_code==0 else 'error'});return 0
         except (OSError,subprocess.TimeoutExpired):
             send({'status':'error'});return 1
+    if msg.get('action')=='trash-file':
+        try:
+            target=(Path.home()/'Downloads'/'Яндекс Видео').resolve()
+            file=Path(msg.get('filename',''))
+            if file.is_symlink() or not file.is_file() or file.parent.resolve()!=target: raise ValueError('path')
+            from send2trash import send2trash
+            send2trash(str(file));send({'status':'done'});return 0
+        except Exception:
+            send({'status':'error','text':'Не удалось переместить файл в корзину. Файл сохранён.'});return 1
     if msg.get('action')!='download' or not valid_url(msg.get('url')):
         send({'status':'error','text':'Недопустимая ссылка на видео.'});return 2
     quality=msg.get('quality','best')
     if quality not in ('best','1080','720','480','360'):
         send({'status':'error','text':'Недопустимое качество видео.'});return 2
-    process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker',msg['url'],quality],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,start_new_session=True)
+    process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker',msg['url'],quality],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,encoding='utf-8',env={**os.environ,'PYTHONIOENCODING':'utf-8'},start_new_session=sys.platform!='win32',creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=='win32' else 0)
     cancelled=threading.Event();finished=threading.Event()
     def stop():
         if process.poll() is None:
+            if sys.platform=='win32':
+                subprocess.run([str(Path(os.environ['SystemRoot'])/'System32'/'taskkill.exe'),'/PID',str(process.pid),'/T','/F'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10,creationflags=subprocess.CREATE_NO_WINDOW)
+                return
             try: os.killpg(process.pid,signal.SIGTERM)
             except ProcessLookupError: pass
             try: process.wait(timeout=3)
