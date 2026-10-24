@@ -6,6 +6,18 @@
   const active=s=>['starting','progress','processing'].includes(s?.status);
   const rectOf=e=>e.getBoundingClientRect?.()||{left:0,top:0,right:160,bottom:90,width:160,height:90};
   const visible=r=>r.width>40&&r.height>25&&r.bottom>=0&&r.top<(typeof innerHeight==='number'?innerHeight:2000)+100;
+  let pageURL=location.href;
+  function clearControls(){for(const item of records.values())item.ui.remove();records.clear();panel?.remove();panel=null;}
+  function routeChanged(){if(pageURL===location.href)return false;pageURL=location.href;clearControls();return true;}
+  function exposed(card,box){
+    if(card.isConnected===false||card.getClientRects?.().length===0)return false;
+    if(typeof getComputedStyle==='function'){const style=getComputedStyle(card);if(style.visibility==='hidden'||style.visibility==='collapse'||style.display==='none')return false;}
+    if(!document.elementsFromPoint||!card.contains)return true;
+    const x=Math.max(0,box.left)+Math.max(0,Math.min(box.right,innerWidth)-Math.max(0,box.left))/2;
+    const y=Math.max(0,box.top)+Math.max(0,Math.min(box.bottom,innerHeight)-Math.max(0,box.top))/2;
+    const hit=document.elementsFromPoint(x,y).find(e=>e!==host);
+    return !!hit&&card.contains(hit);
+  }
   function ensureRoot(){
     if(root&&host.isConnected!==false)return root;
     host=document.createElement('div');host.id='yvd-root';
@@ -32,6 +44,7 @@
     button.title='Скачать '+info.title;button.setAttribute('aria-label',active(state)?'Отменить скачивание':'Скачать '+info.title);
     button.addEventListener('click',async e=>{
       e.preventDefault();e.stopPropagation();
+      if(routeChanged()){schedule();return;}
       try{const reply=await chrome.runtime.sendMessage({type:active(states.get(info.url))?'yvd-cancel':'yvd-start',url:info.url});if(reply?.error)states.set(info.url,{status:'error',text:reply.error});}
       catch{states.set(info.url,{status:'error',text:'Обновите страницу после обновления расширения.'});}
       paint();
@@ -54,10 +67,10 @@
   }
   function positionAll(){
     // Read all geometry first, then touch only our isolated overlay.
-    const positions=Array.from(records.values(),item=>({item,...measure(item.card)}));
-    for(const {item,outer,box} of positions){
+    const positions=Array.from(records.values(),item=>{const measured=measure(item.card);return {item,...measured,shown:visible(measured.outer)&&exposed(item.card,measured.box)};});
+    for(const {item,outer,box,shown} of positions){
       const ui=item.ui;if(!ui.style)continue;
-      if(!visible(outer)){ui.style.display='none';continue;}ui.style.display='flex';
+      if(!shown){ui.style.display='none';continue;}ui.style.display='flex';
       if(preferences.placement==='separate'){
         ui.style.left=Math.max(4,outer.left)+'px';ui.style.top=Math.max(4,outer.bottom-29)+'px';ui.style.transform='none';
       }else{
@@ -69,6 +82,7 @@
     }
   }
   function refresh(){
+    routeChanged();
     const wanted=new Map();
     for(const card of document.querySelectorAll('.VideoSnippet, [data-testid="video_card_layout"]'))if(visible(rectOf(card)))wanted.set(card,YVD.extract(card));
     for(const item of YVD.genericCards(document))if(visible(rectOf(item.element))&&!wanted.has(item.element))wanted.set(item.element,item.info);
@@ -81,7 +95,7 @@
     }
     positionAll();paint();
   }
-  function schedule(){if(timer===null)timer=setTimeout(()=>{timer=null;refresh();},400);}
+  function schedule(){routeChanged();for(const [card,item] of records)if(card.isConnected===false){item.ui.remove();records.delete(card);}if(timer===null)timer=setTimeout(()=>{timer=null;refresh();},400);}
   new MutationObserver(schedule).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['href','src','poster']});
   chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
     if(msg.type==='yvd-state'){states.set(msg.url,msg);paint();return;}
@@ -99,6 +113,8 @@
   window.addEventListener('scroll',()=>{if(scrollFrame===null){scrollFrame=requestAnimationFrame(()=>{scrollFrame=null;positionAll();});}schedule();},{passive:true});
   window.addEventListener('resize',()=>{positionAll();schedule();});window.addEventListener('popstate',schedule);
   document.addEventListener?.('loadedmetadata',schedule,true);document.addEventListener?.('load',e=>{if(e.target?.tagName==='IMG')schedule();},true);
-  let last=location.href;setInterval(()=>{if(last!==location.href){last=location.href;schedule();}},1000);
+  window.addEventListener('pagehide',clearControls);
+  window.addEventListener('pageshow',schedule);
+  setInterval(()=>{if(routeChanged())schedule();else positionAll();},250);
   refresh();
 })();

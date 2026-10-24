@@ -20,6 +20,11 @@
   function extract(card) {
     let fallback=null;
     const title=a=>(card.querySelector('.VideoSnippet-Title, .VideoViewer-DetailsTitle, [data-testid="video_card_title"]')?.textContent||a.title||'Видео').trim().slice(0,200);
+    // The search result explicitly identifies its original source. Its URL need
+    // not contain /video/ (legacy Mail and arbitrary publisher routes do not).
+    const source=card.querySelector('a.VideoHostExtended-Host[href]');
+    const explicit=source&&publicURL(source.href);
+    if(explicit)return {url:sourceURL(explicit)||explicit,title:title(source)};
     for(const a of card.querySelectorAll('a[href]')){
       const url=sourceURL(a.href);if(url)return {url,title:title(a)};
       const generic=videoURL(a.href);

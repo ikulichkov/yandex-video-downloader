@@ -45,7 +45,7 @@ test('worker accepts exact VK video and Yandex; rejects other senders; keeps pro
 function findUI(node,id){if(node.id===id)return node;for(const child of [...node.children,...(node.shadowRoot?[node.shadowRoot]:[])]){const found=findUI(child,id);if(found)return found;}return undefined;}
 function cardControls(body){return body.children.flatMap(h=>h.shadowRoot?.children||[]).filter(x=>(x.className||'').split(' ').includes('card'));}
 class El{
- constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.listeners={};this.attrs={};this.parent=null;}
+ constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.listeners={};this.attrs={};this.parent=null;this.style={};}
  attachShadow(){this.shadowRoot=new El('shadow');return this.shadowRoot;}
  append(...items){for(const x of items){x.parent=this;this.children.push(x)}}
  replaceChildren(){this.children=[]}
@@ -167,4 +167,33 @@ test('generic detection skips off-screen cards, navigation and current-video lin
  a.getBoundingClientRect=()=>({top:0,bottom:200});a.href=doc.URL;assert.equal(YVD.genericCards(doc).length,0);
  a.href='https://example.com/video/42';a.textContent='Войти';assert.equal(YVD.genericCards(doc).length,0);
  a.textContent='Video';a.closest=()=>({tagName:'NAV'});assert.equal(YVD.genericCards(doc).length,0);
+});
+
+test('explicit search source supports legacy Mail and arbitrary publisher paths without selecting channel links',()=>{
+ for(const url of ['http://video.mail.ru/mail/vitalik_67_2010/_myvideo/49.html','https://publisher.example/articles/42.html']){
+  const card={querySelector:s=>s==='a.VideoHostExtended-Host[href]'?{href:url}:{textContent:'Source title'},querySelectorAll:()=>[{href:'https://yandex.ru/video/search?text=channel'}]};
+  assert.deepEqual(YVD.extract(card),{url,title:'Source title'});
+ }
+ const bad={querySelector:s=>s==='a.VideoHostExtended-Host[href]'?{href:'http://localhost/private'}:{textContent:'x'},querySelectorAll:()=>[]};
+ assert.equal(YVD.extract(bad),null);
+});
+
+test('overlay clears before route rescan and hides cards covered by a player at the same URL',()=>{
+ const body=new El('body'),loc={href:vk},events={},timers=[];let tick,mutation,covered=false;
+ const card=new El('div');card.isConnected=true;card.contains=e=>e===card;
+ card.getBoundingClientRect=()=>({left:10,top:10,right:210,bottom:130,width:200,height:120});
+ card.querySelectorAll=()=>[];
+ const doc={body,title:'test',createElement:t=>new El(t),querySelectorAll:()=>[],querySelector:()=>null,elementsFromPoint:()=>covered?[{}]:[card]};
+ const chrome={runtime:{onMessage:{addListener(){}},sendMessage:async()=>[]}};
+ const shared={...YVD,genericCards:()=>[{element:card,info:{url:'https://ok.ru/video/99',title:'Card'}}]};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,location:loc,chrome,YVD:shared,innerWidth:1000,innerHeight:800,MutationObserver:class{constructor(f){mutation=f}observe(){}},window:{addEventListener:(k,f)=>events[k]=f},setTimeout:f=>{timers.push(f);return timers.length},clearTimeout(){},setInterval:f=>tick=f});
+ assert.equal(cardControls(body).length,1);assert.equal(cardControls(body)[0].style.display,'flex');
+ covered=true;tick();assert.equal(cardControls(body)[0].style.display,'none');
+ covered=false;tick();assert.equal(cardControls(body)[0].style.display,'flex');
+ loc.href='https://vkvideo.ru/video-123_456';tick();assert.equal(cardControls(body).length,0);
+ timers.shift()();assert.equal(cardControls(body).length,1);
+ card.isConnected=false;mutation();assert.equal(cardControls(body).length,0);
+ card.isConnected=true;timers.shift()();assert.equal(cardControls(body).length,1);
+ events.pagehide();assert.equal(cardControls(body).length,0);
+ events.pageshow();timers.shift()();assert.equal(cardControls(body).length,1);
 });
