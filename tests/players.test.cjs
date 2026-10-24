@@ -54,7 +54,7 @@ test('current-video panel updates across SPA routes, sends exact URL, and remove
  const body=new El('body'),requests=[],loc={href:vk};let interval,receive;
  const doc={body,title:'VK current',createElement:tag=>new El(tag),getElementById:id=>body.children.find(e=>e.id===id),querySelector:()=>null,querySelectorAll:()=>[]};
  const chrome={runtime:{onMessage:{addListener:f=>receive=f},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?[]:{ok:true}}}};
- chrome.storage={local:{get:async()=>({placement:'top-left',showCurrentPanel:true})}};
+ let storageChanged;const prefs={placement:'top-left',showCurrentPanel:true};chrome.storage={local:{get:async()=>prefs},onChanged:{addListener:f=>storageChanged=f}};
  const context={document:doc,location:loc,chrome,YVD,Element:El,Map,JSON,MutationObserver:class{observe(){}},window:{addEventListener(){}},setInterval:f=>interval=f,setTimeout,clearTimeout};
  vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),context);
  await Promise.resolve();
@@ -67,6 +67,8 @@ test('current-video panel updates across SPA routes, sends exact URL, and remove
  loc.href='https://vkvideo.ru/video-123_456';interval();panel=doc.getElementById('yvd-current');assert.equal(body.children.length,1);
  button=panel.children.find(x=>x.tag==='button');await button.listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.at(-1).url,loc.href);
  loc.href='https://vkvideo.ru/';interval();assert.equal(doc.getElementById('yvd-current'),undefined);
+ loc.href=vk;prefs.showCurrentPanel=false;storageChanged({showCurrentPanel:{newValue:false}},'local');await Promise.resolve();assert.equal(doc.getElementById('yvd-current'),undefined);
+ prefs.showCurrentPanel=true;storageChanged({showCurrentPanel:{newValue:true}},'local');await Promise.resolve();assert.ok(doc.getElementById('yvd-current'));
 });
 test('manifest identity retained; code parses; exact requested video pages covered',()=>{
  const manifest=JSON.parse(fs.readFileSync(require.resolve('../manifest.json'),'utf8'));

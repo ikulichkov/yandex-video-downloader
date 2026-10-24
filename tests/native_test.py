@@ -35,3 +35,20 @@ with patch.object(host.socket,'getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',4
 
 assert not host.valid_url('http://224.0.0.1/video.mp4')
 assert 'требует вход' in host.error_message(ValueError('Sign in to confirm you are not a bot'))
+# A generic page containing a playlist must not silently download its first video.
+from types import SimpleNamespace
+class Playlist:
+ processed=False
+ def __init__(self,opts):pass
+ def __enter__(self):return self
+ def __exit__(self,*args):pass
+ def extract_info(self,url,download):
+  assert download is False
+  return {'_type':'playlist','entries':[{'id':'first'}]}
+ def process_ie_result(self,*args,**kwargs):
+  Playlist.processed=True
+  raise AssertionError('playlist download must not start')
+with tempfile.TemporaryDirectory() as tmp,patch.object(Path,'home',return_value=Path(tmp)),patch.object(host,'install_public_network_guard'),patch.dict(sys.modules,{'yt_dlp':SimpleNamespace(YoutubeDL=Playlist)}),patch('builtins.print') as emit:
+ assert host.worker('https://example.com/video/collection')==1
+ assert not Playlist.processed
+ assert json.loads(emit.call_args.args[0])['status']=='error'
