@@ -2,7 +2,7 @@
 """Private Chrome native host. No shell, cookies, credentials or listening socket."""
 import json, os, re, signal, struct, subprocess, sys, threading, time, socket, ipaddress
 from pathlib import Path
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit, parse_qs, parse_qsl
 HOST = 'ru.local.yandex_video_downloader'
 ROOT = Path(__file__).resolve().parent.parent
 EXT_ID = (ROOT/'extension-id.txt').read_text().strip()
@@ -39,7 +39,7 @@ def error_message(exc):
     if re.search(r'private/local network|local network targets',text):return 'Локальные и внутренние сетевые адреса не скачиваются.'
     if re.search(r'403|forbidden|access denied',text):return 'Источник запретил скачивание этого ролика.'
     if re.search(r'429|too many requests',text):return 'Источник временно ограничил запросы. Повторите позже.'
-    if 'multiple videos' in text:return 'На странице несколько роликов. Нажмите кнопку у нужной карточки.'
+    if 'multiple videos' in text:return 'Источник не позволил однозначно определить выбранное видео. Попробуйте открыть оригинал ролика.'
     if re.search(r'unsupported url|no video formats|no formats found',text):return 'Не найден доступный видеофайл. Источник может скрывать или защищать поток.'
     if re.search(r'timeout|timed out|network is unreachable',text):return 'Нет связи с источником. Попробуйте позже.'
     return 'Не удалось скачать ролик. Он может быть закрыт, защищён или пока не распознаваться загрузчиком.'
@@ -71,6 +71,35 @@ def format_selector(quality, ffmpeg):
     height='' if quality=='best' else f'[height<={quality}]'
     return f'bv*{height}{protocol}+ba{protocol}/b{height}{protocol}' if ffmpeg else f'b{height}{protocol}'
 
+def source_identity(url):
+    if not valid_url(url): return None
+    u=urlsplit(url)
+    return (u.hostname.lower().removeprefix('www.'),u.port if u.port not in (80,443) else None,u.path.rstrip('/') or '/',tuple(sorted((k,v) for k,v in parse_qsl(u.query,keep_blank_values=True) if not k.startswith('utm_'))))
+
+def resolve_video(ydl,url):
+    """Inspect bounded raw metadata; never process a whole playlist for a card."""
+    expected=source_identity(url);seen={(url,None)}
+    def visit(info,depth=0):
+        if depth>6 or not isinstance(info,dict): raise ValueError('multiple videos: unresolved source')
+        kind=info.get('_type','video')
+        if kind in ('playlist','multi_video'):
+            entries=[]
+            for index,item in enumerate(info.get('entries') or []):
+                if index>=100: raise ValueError('multiple videos: scan limit')
+                if isinstance(item,dict): entries.append(item)
+            if len(entries)==1:return visit(entries[0],depth+1)
+            matches=[item for item in entries if expected and any(source_identity(item.get(key))==expected for key in ('webpage_url','original_url','url'))]
+            if len(matches)==1:return visit(matches[0],depth+1)
+            raise ValueError('multiple videos: ambiguous source')
+        if kind in ('url','url_transparent'):
+            target=info.get('url');key=(target,info.get('ie_key'))
+            if not valid_url(target) or key in seen: raise ValueError('multiple videos: source cycle')
+            seen.add(key)
+            return visit(ydl.extract_info(target,download=False,process=False,ie_key=info.get('ie_key')),depth+1)
+        if kind!='video': raise ValueError('multiple videos: unsupported wrapper')
+        return info
+    return visit(ydl.extract_info(url,download=False,process=False))
+
 def worker(url, quality='best'):
     # Separate process permits real cancellation, including extractor/ffmpeg children.
     def emit(**msg): print(json.dumps(msg,ensure_ascii=False),flush=True)
@@ -99,7 +128,7 @@ def worker(url, quality='best'):
                 import imageio_ffmpeg
                 ffmpeg=imageio_ffmpeg.get_ffmpeg_exe()
             except (ImportError,RuntimeError): pass
-        opts={'quiet':True,'no_warnings':True,'logger':Quiet(),'noplaylist':True,'playlistend':1,
+        opts={'quiet':True,'no_warnings':True,'logger':Quiet(),'noplaylist':True,
               'socket_timeout':25,'retries':2,'fragment_retries':2,'continuedl':True,
               'outtmpl':str(target/'%(title).140B [%(id)s] [%(height)sp].%(ext)s'),'restrictfilenames':False,
               'windowsfilenames':True,'overwrites':False,'progress_hooks':[progress],
@@ -111,8 +140,7 @@ def worker(url, quality='best'):
         if node:opts['js_runtimes']={'node':{'path':node}}
         emit(status='progress',text='Получение полного видео…')
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info=ydl.extract_info(url,download=False)
-            if not info or info.get('_type') in ('playlist','multi_video'): raise ValueError('multiple videos: choose a video card')
+            info=resolve_video(ydl,url)
             info=ydl.process_ie_result(info,download=True)
             # Completion requires an actual complete media file, not only a finished fragment.
             expected=Path(ydl.prepare_filename(info))
@@ -136,7 +164,7 @@ def main():
     try: msg=read_message(input_stream)
     except (EOFError,ValueError,json.JSONDecodeError): return 2
     if msg.get('action')=='ping':
-        send({'status':'ready','version':'2.2.1'});return 0
+        send({'status':'ready','version':'2.2.3'});return 0
     if msg.get('action')=='open-folder':
         try:
             target=Path.home()/'Downloads'/'Яндекс Видео'

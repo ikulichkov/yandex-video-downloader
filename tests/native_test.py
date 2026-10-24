@@ -42,9 +42,9 @@ class Playlist:
  def __init__(self,opts):pass
  def __enter__(self):return self
  def __exit__(self,*args):pass
- def extract_info(self,url,download):
+ def extract_info(self,url,download,process=False):
   assert download is False
-  return {'_type':'playlist','entries':[{'id':'first'}]}
+  return {'_type':'playlist','entries':[{'id':'first'},{'id':'second'}]}
  def process_ie_result(self,*args,**kwargs):
   Playlist.processed=True
   raise AssertionError('playlist download must not start')
@@ -99,3 +99,27 @@ with tempfile.TemporaryDirectory() as tmp,patch.object(Path,'home',return_value=
  assert host.worker('https://example.com/video/1')==0
  result=json.loads(emit.call_args.args[0]);assert result['status']=='done'
  assert Path(result['filename']).is_absolute() and Path(result['filename']).is_file()
+
+# Select one unambiguous card result, never a first playlist item or an entire playlist.
+class Metadata:
+ def __init__(self,info,children=None):self.info=info;self.children=children or {};self.calls=[]
+ def extract_info(self,url,**kwargs):
+  assert kwargs['download'] is False and kwargs['process'] is False
+  self.calls.append(url);return self.children.get(url,self.info)
+a='https://publisher.example/watch?v=2';one={'id':'one','formats':[{'url':'https://cdn.example/one.mp4'}]};two={'id':'two','webpage_url':a,'formats':[{'url':'https://cdn.example/two.mp4'}]}
+assert host.resolve_video(Metadata({'_type':'playlist','entries':[one]}),a)==one
+assert host.resolve_video(Metadata({'_type':'multi_video','entries':[{'_type':'playlist','entries':[one]}]}),a)==one
+assert host.resolve_video(Metadata({'_type':'playlist','entries':[one,two]}),a)==two
+entry={'_type':'url','url':'https://cdn.example/one.mp4'}
+assert host.resolve_video(Metadata({'_type':'playlist','entries':[entry]},{entry['url']:one}),a)==one
+for info in [
+ {'_type':'playlist','entries':[one,{'id':'other'}]},
+ {'_type':'multi_video','entries':[two,{**two,'id':'another-part'}]},
+ {'_type':'playlist','entries':[two]*101},
+ {'_type':'playlist','entries':[]},
+ {'_type':'url','url':a},
+]:
+ try:host.resolve_video(Metadata(info),a)
+ except ValueError as exc:assert 'multiple videos' in str(exc)
+ else:raise AssertionError('ambiguous/unbounded/cyclic source was accepted')
+assert 'Нажмите кнопку' not in host.error_message(ValueError('multiple videos'))

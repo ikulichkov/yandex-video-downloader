@@ -17,7 +17,14 @@
   }
   async function checkHelper(){
     el('helper').textContent='Проверяю помощник…';el('check-helper').disabled=true;
-    try{const result=await chrome.runtime.sendMessage({type:'yvd-helper-status'});helperReady=result?.status==='ready';if(el('helper-hint'))el('helper-hint').textContent=helperReady?'':result?.text||'Установите локальный помощник: Windows — install-windows.cmd, macOS — install.command из архива расширения.';}
+    try{const result=await chrome.runtime.sendMessage({type:'yvd-helper-status'});helperReady=result?.status==='ready';if(el('helper-hint')){
+      let outdated=false;
+      if(helperReady&&/^\d+\.\d+\.\d+$/.test(result.version||'')){
+        const actual=result.version.split('.').map(Number),required=[2,2,3];
+        for(let i=0;i<3;i++)if(actual[i]!==required[i]){outdated=actual[i]<required[i];break;}
+      }
+      el('helper-hint').textContent=outdated?'Помощник '+result.version+': для исправления выбора роликов обновите его — Windows: install-windows.cmd; macOS: install.command из нового архива.':helperReady?'':result?.text||'Установите локальный помощник: Windows — install-windows.cmd, macOS — install.command из архива расширения.';
+    }}
     catch{helperReady=false;if(el('helper-hint'))el('helper-hint').textContent='Нет связи с локальным помощником. Windows: install-windows.cmd; macOS: install.command из архива расширения.';}
     el('helper').textContent=helperReady?'● Помощник готов':'● Помощник недоступен';
     el('helper').className=helperReady?'ready':'error';el('check-helper').disabled=false;

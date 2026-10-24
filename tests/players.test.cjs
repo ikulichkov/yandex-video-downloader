@@ -218,10 +218,10 @@ test('version checks compare numeric components, cache safely, reject invalid me
 
 test('popup offers update archive and persists user quality',async()=>{
  const elements=new Map(),requests=[];
- for(const id of ['video-title','download','status','page-hint','helper','check-helper','folder','folder-status','version','placement','show-current-panel','settings-status','quality','update-status','check-update','download-update'])elements.set(id,new El('div'));
- const chrome={runtime:{getManifest:()=>({version:'2.1.0'}),sendMessage:async m=>{requests.push(m);return m.type==='yvd-check-update'?{status:'ok',available:true,current:'2.1.0',latest:'2.2.0',archive:'https://evil.example/'}:{status:'ready'}}},tabs:{query:async()=>[],sendMessage:async()=>null},storage:{local:{get:async()=>({placement:'top-left',showCurrentPanel:false,quality:'720'}),set:async m=>requests.push(m)}}};
+ for(const id of ['video-title','download','status','page-hint','helper','check-helper','folder','folder-status','version','placement','show-current-panel','settings-status','quality','helper-hint','update-status','check-update','download-update'])elements.set(id,new El('div'));
+ const chrome={runtime:{getManifest:()=>({version:'2.1.0'}),sendMessage:async m=>{requests.push(m);return m.type==='yvd-check-update'?{status:'ok',available:true,current:'2.1.0',latest:'2.2.0',archive:'https://evil.example/'}:{status:'ready',version:'2.2.1'}}},tabs:{query:async()=>[],sendMessage:async()=>null},storage:{local:{get:async()=>({placement:'top-left',showCurrentPanel:false,quality:'720'}),set:async m=>requests.push(m)}}};
  vm.runInNewContext(fs.readFileSync(require.resolve('../popup.js'),'utf8'),{document:{getElementById:id=>elements.get(id)},chrome,setInterval(){}});
- await new Promise(r=>setImmediate(r));assert.equal(elements.get('quality').value,'720');assert.equal(elements.get('download-update').hidden,false);assert.equal(elements.get('download-update').href,'https://github.com/ikulichkov/yandex-video-downloader/archive/refs/heads/main.zip');
+ await new Promise(r=>setImmediate(r));assert.equal(elements.get('quality').value,'720');assert.ok(elements.get('helper-hint').textContent.includes('2.2.1'));assert.ok(elements.get('helper-hint').textContent.includes('install-windows.cmd'));assert.equal(elements.get('download-update').hidden,false);assert.equal(elements.get('download-update').href,'https://github.com/ikulichkov/yandex-video-downloader/archive/refs/heads/main.zip');
  elements.get('quality').value='best';await elements.get('quality').listeners.change();assert.equal(requests.at(-1).quality,'best');
  await elements.get('check-update').listeners.click();assert.equal(requests.at(-1).force,true);
 });
