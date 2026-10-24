@@ -32,7 +32,8 @@ test('worker accepts exact VK video and Yandex; rejects other senders; keeps pro
  const listener=chrome.runtime.onMessage.listeners[0];
  function send(type,url,senderURL=vk){let reply;listener({type,url},{tab:{id:1},url:senderURL},x=>reply=x);return reply;}
  assert.equal(send('yvd-start',vk,'https://evil.test/video-123_456'),undefined);
- assert.equal(send('yvd-start',vk,'https://vkvideo.ru/'),undefined);
+ assert.equal(send('yvd-start',vk,'https://vk.com/'),undefined);
+ assert.ok(Array.isArray(send('yvd-status',null,'https://vkvideo.ru/')));
  assert.equal(ports.length,0);
  assert.ok(send('yvd-start',vk).ok);assert.equal(ports.length,1);
  assert.ok(send('yvd-start',vk).error);assert.equal(ports.length,1);

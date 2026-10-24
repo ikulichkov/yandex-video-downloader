@@ -5,7 +5,7 @@ const allowedPage = value => {
     const u=new URL(value);
     if(u.protocol!=='https:'||u.username||u.password||u.port) return false;
     if((u.hostname==='ya.ru'||u.hostname==='yandex.ru'||u.hostname.endsWith('.yandex.ru'))&&u.pathname.startsWith('/video/')) return true;
-    return ['vkvideo.ru','vk.com'].includes(u.hostname) && Boolean(YVD.sourceURL(value));
+    return u.hostname==='vkvideo.ru' || (u.hostname==='vk.com' && Boolean(YVD.sourceURL(value)));
   }catch{return false;}
 };
 importScripts('cards.js');
