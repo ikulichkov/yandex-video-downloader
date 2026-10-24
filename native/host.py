@@ -75,6 +75,7 @@ def worker(url, quality='best'):
     # Separate process permits real cancellation, including extractor/ffmpeg children.
     def emit(**msg): print(json.dumps(msg,ensure_ascii=False),flush=True)
     try:
+        emit(status='progress',text='Подготовка загрузчика…')
         install_public_network_guard()
         import yt_dlp
         from shutil import which
@@ -119,7 +120,7 @@ def worker(url, quality='best'):
             candidates += [expected,expected.with_suffix('.mp4'),expected.with_suffix('.mkv'),expected.with_suffix('.webm')]
             file=next((p for p in candidates if p.is_file() and p.stat().st_size>0 and p.resolve().parent==target.resolve()),None)
             if not file: raise ValueError('no output')
-            emit(status='done',text='Сохранено в Загрузки/Яндекс Видео',filename=file.name)
+            emit(status='done',text='Сохранено в Загрузки/Яндекс Видео',filename=str(file))
         return 0
     except Exception as exc:
         emit(status='error',text=error_message(exc));return 1
@@ -135,7 +136,7 @@ def main():
     try: msg=read_message(input_stream)
     except (EOFError,ValueError,json.JSONDecodeError): return 2
     if msg.get('action')=='ping':
-        send({'status':'ready','version':'2.2.0'});return 0
+        send({'status':'ready','version':'2.2.1'});return 0
     if msg.get('action')=='open-folder':
         try:
             target=Path.home()/'Downloads'/'Яндекс Видео'
@@ -159,7 +160,9 @@ def main():
     quality=msg.get('quality','best')
     if quality not in ('best','1080','720','480','360'):
         send({'status':'error','text':'Недопустимое качество видео.'});return 2
-    process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker',msg['url'],quality],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,encoding='utf-8',env={**os.environ,'PYTHONIOENCODING':'utf-8'},start_new_session=sys.platform!='win32',creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=='win32' else 0)
+    # The worker never reads native commands. Inheriting that pipe can stall
+    # Windows interpreter startup while the control thread waits on the same pipe.
+    process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker',msg['url'],quality],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,encoding='utf-8',env={**os.environ,'PYTHONIOENCODING':'utf-8'},start_new_session=sys.platform!='win32',creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=='win32' else 0)
     cancelled=threading.Event();finished=threading.Event()
     def stop():
         if process.poll() is None:

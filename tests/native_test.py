@@ -76,3 +76,26 @@ with tempfile.TemporaryDirectory() as tmp:
    stdout.buffer=output;host.main()
   assert host.read_message(io.BytesIO(output.getvalue()))['status']==expected
   assert bool(calls)==(expected=='done')
+
+# A worker must not inherit the browser's native command pipe (Windows startup hang).
+from unittest.mock import MagicMock
+output=io.BytesIO();process=MagicMock();process.stdout=[json.dumps({'status':'done','filename':'test.mp4'})];process.poll.return_value=0
+with patch.object(sys,'argv',[str(root/'native/host.py'),origin]),patch.object(host.os,'dup',return_value=0),patch.object(host.os,'fdopen',return_value=io.BytesIO(frame({'action':'download','url':'https://example.com/video/1','quality':'720'}))),patch.object(host.subprocess,'Popen',return_value=process) as popen,patch.object(host.threading.Thread,'start'),patch.object(sys,'stdout') as stdout:
+ stdout.buffer=output;host.main()
+ assert popen.call_args.kwargs['stdin']==subprocess.DEVNULL
+ assert popen.call_args.kwargs['encoding']=='utf-8'
+ assert popen.call_args.args[0][-1]=='720'
+
+# Completion exposes the actual full path used later by the confined trash action.
+class Completed:
+ def __init__(self,opts):
+  self.file=Path(opts['outtmpl']).parent/'fixture.mp4';self.file.write_bytes(b'fixture')
+ def __enter__(self):return self
+ def __exit__(self,*args):pass
+ def extract_info(self,*args,**kwargs):return {'id':'fixture'}
+ def process_ie_result(self,info,download):return {'filepath':str(self.file)}
+ def prepare_filename(self,info):return str(self.file)
+with tempfile.TemporaryDirectory() as tmp,patch.object(Path,'home',return_value=Path(tmp)),patch.object(host,'install_public_network_guard'),patch.dict(sys.modules,{'yt_dlp':SimpleNamespace(YoutubeDL=Completed)}),patch('builtins.print') as emit:
+ assert host.worker('https://example.com/video/1')==0
+ result=json.loads(emit.call_args.args[0]);assert result['status']=='done'
+ assert Path(result['filename']).is_absolute() and Path(result['filename']).is_file()
