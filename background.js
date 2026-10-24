@@ -14,6 +14,12 @@ function notify(job, state) {
   chrome.tabs.sendMessage(job.tab,{type:'yvd-state',...job.state}).catch(()=>{});
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
+  if(['yvd-helper-status','yvd-open-folder'].includes(msg.type)) {
+    if(sender.id!==chrome.runtime.id || sender.url!==chrome.runtime.getURL('popup.html')) return;
+    const action=msg.type==='yvd-helper-status'?'ping':'open-folder';
+    chrome.runtime.sendNativeMessage(HOST,{action}).then(reply).catch(()=>reply({status:'error'}));
+    return true;
+  }
   if(!sender.tab || !allowedPage(sender.url)) return;
   const tab=sender.tab.id;
   if(msg.type==='yvd-status') {reply([...jobs.values()].filter(j=>j.tab===tab).map(j=>j.state));return;}

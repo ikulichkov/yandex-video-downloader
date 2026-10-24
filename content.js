@@ -30,9 +30,10 @@
       const signature=JSON.stringify([current,states.get(current.url)]);
       if(panel.dataset.signature!==signature){panel.dataset.signature=signature;render(null,panel,current);}
     }
-    for(const card of document.querySelectorAll('.VideoSnippet')) {
-      let ui=card.querySelector(':scope > .yvd-tools');
-      if(!ui){ui=document.createElement('div');ui.className='yvd-tools';card.append(ui);}
+    for(const card of document.querySelectorAll('.VideoSnippet, [data-testid="video_card_layout"]')) {
+      const target=card;
+      let ui=target.querySelector(':scope > .yvd-tools');
+      if(!ui){ui=document.createElement('div');ui.className='yvd-tools';ui.addEventListener('pointerdown',e=>e.stopPropagation());target.append(ui);}
       const info=YVD.extract(card),state=info&&states.get(info.url);
       const signature=JSON.stringify([info,state]);
       if(ui.dataset.signature!==signature){ui.dataset.signature=signature;render(card,ui,info);}
@@ -43,7 +44,18 @@
     if(records.every(r=>r.target instanceof Element&&r.target.closest('.yvd-tools'))) return;
     clearTimeout(timer);timer=setTimeout(refresh,150);
   }).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['href']});
-  chrome.runtime.onMessage.addListener(msg=>{if(msg.type==='yvd-state'){states.set(msg.url,msg);refresh();}});
+  chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
+    if(msg.type==='yvd-state'){states.set(msg.url,msg);refresh();return;}
+    if(!['yvd-page-info','yvd-download-current'].includes(msg.type)) return;
+    if(sender?.id!==chrome.runtime.id || sender?.url!==chrome.runtime.getURL('popup.html')) return;
+    const info=YVD.currentVideo(document,location.href);
+    if(msg.type==='yvd-page-info'){
+      reply({supported:true,current:info,state:info?states.get(info.url)||null:null,cards:document.querySelectorAll('.yvd-tools:not(#yvd-current)').length});return;
+    }
+    if(!info){reply({error:'Откройте ролик Яндекса или VK Видео.'});return;}
+    chrome.runtime.sendMessage({type:active(states.get(info.url))?'yvd-cancel':'yvd-start',url:info.url}).then(reply).catch(()=>reply({error:'Обновите страницу видео.'}));
+    return true;
+  });
   chrome.runtime.sendMessage({type:'yvd-status'}).then(list=>{for(const s of list||[])states.set(s.url,s);refresh();}).catch(()=>{});
   let lastPage=location.href;
   setInterval(()=>{if(lastPage!==location.href){lastPage=location.href;refresh();}},1000);

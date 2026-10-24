@@ -20,7 +20,7 @@
   function extract(card) {
     for (const a of card.querySelectorAll('a[href]')) {
       const url=sourceURL(a.href);
-      if(url) return {url,title:(card.querySelector('.VideoSnippet-Title, .VideoViewer-DetailsTitle')?.textContent||a.title||'Видео').trim().slice(0,200)};
+      if(url) return {url,title:(card.querySelector('.VideoSnippet-Title, .VideoViewer-DetailsTitle, [data-testid="video_card_title"]')?.textContent||a.title||'Видео').trim().slice(0,200)};
     }
     return null;
   }

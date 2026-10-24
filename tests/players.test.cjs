@@ -74,3 +74,58 @@ test('manifest identity retained; code parses; exact requested video pages cover
  assert.ok(manifest.content_scripts[0].matches.includes('https://vkvideo.ru/*'));
  for(const file of ['cards.js','content.js','background.js'])new vm.Script(fs.readFileSync(require.resolve('../'+file),'utf8'));
 });
+test('VK sidebar controls use their own card, do not navigate player, and survive dynamic updates without duplicates',async()=>{
+ const body=new El('body'),requests=[],cards=[];let changed,receive;
+ function makeCard(url,title){
+  const card=new El('div'),info=new El('div');card.url=url;card.videoTitle=title;
+  card.querySelector=s=>s===':scope > .yvd-tools'?card.children.find(x=>x.className==='yvd-tools'):{textContent:card.videoTitle};
+  card.querySelectorAll=()=>[{href:card.url}];
+  info.querySelector=()=>info.children.find(x=>x.className==='yvd-tools');
+  card.append(info);return {card,info};
+ }
+ const first=makeCard('https://vkvideo.ru/video-234113842_456242432','Боковой ролик');cards.push(first.card);
+ const loc={href:vk};
+ const doc={body,title:'Основной ролик',createElement:tag=>new El(tag),getElementById:id=>body.children.find(e=>e.id===id),querySelector:()=>null,querySelectorAll:s=>{assert.ok(s.includes('video_card_layout'));return cards}};
+ const chrome={runtime:{onMessage:{addListener:f=>receive=f},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?[]:{ok:true}}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,location:loc,chrome,YVD,Element:El,Map,JSON,MutationObserver:class{constructor(f){changed=f}observe(){}},window:{addEventListener(){}},setInterval(){},setTimeout(f){f();return 0},clearTimeout(){}});
+ await Promise.resolve();
+ assert.equal(first.card.children.filter(x=>x.className==='yvd-tools').length,1);
+ let ui=first.card.children.find(x=>x.className==='yvd-tools'),button=ui.children.find(x=>x.tag==='button');
+ await button.listeners.click({preventDefault(){},stopPropagation(){}});
+ assert.equal(requests.at(-1).url,first.card.url);assert.equal(loc.href,vk);
+ receive({type:'yvd-state',url:first.card.url,status:'progress',text:'50%'});
+ assert.equal(first.card.children.filter(x=>x.className==='yvd-tools').length,1);assert.equal(first.card.children.find(x=>x.className==='yvd-tools').children.find(x=>x.tag==='button').textContent,'Отменить');
+ const second=makeCard('https://vkvideo.ru/video-123_999','Подгруженный ролик');cards.push(second.card);changed([{target:{}}]);
+ assert.equal(first.card.children.filter(x=>x.className==='yvd-tools').length,1);assert.equal(second.card.children.filter(x=>x.className==='yvd-tools').length,1);
+ button=second.card.children.find(x=>x.className==='yvd-tools').children.find(x=>x.tag==='button');await button.listeners.click({preventDefault(){},stopPropagation(){}});
+ assert.equal(requests.at(-1).url,second.card.url);assert.equal(loc.href,vk);
+});
+test('popup native commands require exact own popup sender, never accept an input path',async()=>{
+ const native=[],id='test-extension',chrome={runtime:{id,getURL:p=>'chrome-extension://'+id+'/'+p,onMessage:event(),sendNativeMessage:async(host,msg)=>{native.push(msg);return {status:'ready'}}},tabs:{onRemoved:event()}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../background.js'),'utf8'),{chrome,URL,YVD,Map,importScripts(){}});
+ const listener=chrome.runtime.onMessage.listeners[0];let result;
+ const popup={id,url:chrome.runtime.getURL('popup.html')};
+ listener({type:'yvd-open-folder',path:'/etc'},{id,url:'https://vkvideo.ru/video-123_456'},x=>result=x);assert.equal(native.length,0);
+ listener({type:'yvd-open-folder',path:'/etc'},{id:'other',url:popup.url},x=>result=x);assert.equal(native.length,0);
+ assert.equal(listener({type:'yvd-helper-status'},popup,x=>result=x),true);await Promise.resolve();assert.equal(native.at(-1).action,'ping');assert.equal(result.status,'ready');
+ listener({type:'yvd-open-folder',path:'/etc'},popup,x=>result=x);await Promise.resolve();assert.equal(JSON.stringify(native.at(-1)),JSON.stringify({action:'open-folder'}));
+});
+test('popup shows current video, forwards download/cancel, probes helper and opens fixed folder',async()=>{
+ const elements=new Map(),requests=[];let poll;
+ for(const id of ['video-title','download','status','page-hint','helper','check-helper','folder','folder-status','version'])elements.set(id,new El('div'));
+ const doc={getElementById:id=>elements.get(id)},page={supported:true,current:{url:vk,title:'Текущий VK'},state:null};
+ const chrome={runtime:{getManifest:()=>({version:'1.2.0'}),sendMessage:async msg=>{requests.push(msg);return {status:msg.type==='yvd-helper-status'?'ready':'done'}}},tabs:{query:async q=>{assert.deepEqual(JSON.parse(JSON.stringify(q)),{active:true,currentWindow:true});return[{id:9}]},sendMessage:async(id,msg)=>{assert.equal(id,9);requests.push(msg);if(msg.type==='yvd-page-info')return page;page.state={status:page.state?'cancelled':'progress',text:'Скачивание…'};return{ok:true}}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../popup.js'),'utf8'),{document:doc,chrome,setInterval:f=>poll=f});
+ await new Promise(r=>setImmediate(r));
+ assert.equal(elements.get('video-title').textContent,'Текущий VK');assert.equal(elements.get('helper').textContent,'● Помощник готов');assert.equal(elements.get('download').disabled,false);
+ await elements.get('download').listeners.click();assert.equal(elements.get('download').textContent,'Отменить скачивание');
+ await elements.get('download').listeners.click();assert.equal(elements.get('download').textContent,'↓ Скачать видео');
+ await elements.get('folder').listeners.click();assert.equal(elements.get('folder-status').textContent,'Папка открыта в Finder.');
+ page.current=null;page.cards=5;await poll();assert.equal(elements.get('download').disabled,true);assert.ok(elements.get('page-hint').textContent.includes('5'));
+});
+test('logo assets are valid PNGs at every Chrome size; popup scripts parse',()=>{
+ for(const n of [16,32,48,128]){const b=fs.readFileSync(require.resolve('../icons/icon'+n+'.png'));assert.equal(b.readUInt32BE(16),n);assert.equal(b.readUInt32BE(20),n);}
+ new vm.Script(fs.readFileSync(require.resolve('../popup.js'),'utf8'));
+ const html=fs.readFileSync(require.resolve('../popup.html'),'utf8');assert.ok(html.includes('src="popup.js"'));assert.ok(!/<script(?![^>]*\bsrc=)/.test(html));
+});
+test('native protocol and helper commands',()=>{require('node:child_process').execFileSync('python3',[require.resolve('./native_test.py')],{stdio:'pipe'});});
