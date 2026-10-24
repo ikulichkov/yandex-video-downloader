@@ -100,7 +100,7 @@
     positionAll();paint();
   }
   function schedule(){routeChanged();for(const [card,item] of records)if(card.isConnected===false){item.ui.remove();records.delete(card);}if(timer===null)timer=setTimeout(()=>{timer=null;refresh();},400);}
-  new MutationObserver(schedule).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['href','src','poster']});
+  new MutationObserver(schedule).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['href','src','poster','data-ad','data-is-ad','aria-label']});
   chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
     if(msg.type==='yvd-state'){states.set(msg.url,msg);paint();return;}
     if(!['yvd-page-info','yvd-download-current'].includes(msg.type))return;

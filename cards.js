@@ -18,6 +18,7 @@
     } catch { return null; }
   }
   function extract(card) {
+    if(isAd(card))return null;
     let fallback=null;
     const title=a=>(card.querySelector('.VideoSnippet-Title, .VideoViewer-DetailsTitle, [data-testid="video_card_title"]')?.textContent||a.title||'Видео').trim().slice(0,200);
     // The search result explicitly identifies its original source. Its URL need
@@ -49,6 +50,10 @@
     return sourceURL(url)||((/\/(?:video(?:embed)?|videos|watch|clip|clips|movie|embed|player)(?:\/|-)[^/?#]+/i.test(u.pathname)||/\/(?:watch|player)$/.test(u.pathname)&&/[?&](?:v|video|clip|movie|id)=/.test(u.search))?url:null);
   }
   function pageTitle(doc){return (doc.querySelector?.('meta[property="og:title"]')?.content||doc.title||'Видео').slice(0,200);}
+  function isAd(element){
+    if(!element)return false;
+    return Boolean(element.closest?.('[data-ad="true"],[data-is-ad="true"],[itemprop="advertisement"],[aria-label="Advertisement" i],[aria-label="Реклама" i]'))||/^(google_ads_iframe|aswift_)/i.test(String(element.name||element.id||''));
+  }
   function currentVideo(doc, pageURL) {
     let page;try{page=new URL(pageURL);}catch{return null;}
     if((page.hostname==='ya.ru'||page.hostname==='yandex.ru'||page.hostname.endsWith('.yandex.ru'))&&/^\/video\/preview\/\d+/.test(page.pathname)){
@@ -60,9 +65,15 @@
     }
     if(!publicURL(pageURL))return null;
     if(videoURL(pageURL)||doc.querySelector?.('meta[property="og:video"],meta[property="og:video:url"],meta[property="og:video:secure_url"]'))return {url:page.href,title:pageTitle(doc)};
-    const video=doc.querySelector?.('video');
-    if(video){const src=publicURL(video.currentSrc||video.src||video.querySelector?.('source[src]')?.src);return {url:src||page.href,title:pageTitle(doc)};}
-    const frame=doc.querySelector?.('iframe[src*="/embed/"],iframe[src*="/videoembed/"],iframe[src*="/player/"]');
+    // Search feeds on known video providers do not identify one current video.
+    if(hosts.has(page.hostname)||page.hostname==='ya.ru'||page.hostname==='yandex.ru'||page.hostname.endsWith('.yandex.ru'))return null;
+    const videos=doc.querySelectorAll?Array.from(doc.querySelectorAll('video')):[doc.querySelector?.('video')];
+    // During client-side ads the same <video> may temporarily contain an ad URL.
+    // Resolve the page's original content rather than downloading the first src.
+    if(videos.some(video=>video&&!isAd(video)))return {url:page.href,title:pageTitle(doc)};
+    const selector='iframe[src*="/embed/"],iframe[src*="/videoembed/"],iframe[src*="/player/"]';
+    const frames=doc.querySelectorAll?Array.from(doc.querySelectorAll(selector)):[doc.querySelector?.(selector)];
+    const frame=frames.find(frame=>frame&&!isAd(frame)&&videoURL(frame.src));
     if(frame&&videoURL(frame.src))return {url:videoURL(frame.src),title:pageTitle(doc)};
     return null;
   }
@@ -70,6 +81,7 @@
     const found=new Map();let checked=0;
     for(const anchor of doc.querySelectorAll('a[href]')){
       if(++checked>3000||found.size>=40)break;
+      if(isAd(anchor))continue;
       const url=videoURL(anchor.href);if(!url||anchor.closest?.('.yvd-tools,.VideoSnippet,[data-testid="video_card_layout"]'))continue;
       if(!anchor.getClientRects?.().length)continue;
       if(anchor.closest?.('header,nav,form,[role="navigation"],[role="banner"]'))continue;
@@ -88,13 +100,13 @@
       }
       if(chosen)found.set(chosen,{url,title:(anchor.title||anchor.textContent?.trim()||chosen.querySelector('img')?.alt||'Видео').slice(0,200)});
     }
-    const videos=Array.from(doc.querySelectorAll('video')).filter(v=>v.getClientRects?.().length);
+    const videos=Array.from(doc.querySelectorAll('video')).filter(v=>v.getClientRects?.().length&&!isAd(v));
     if(videos.length>1)for(const video of videos){
       const url=publicURL(video.currentSrc||video.src);const element=video.parentElement;
       if(url&&element&&!video.closest?.('.VideoSnippet,[data-testid="video_card_layout"],a'))found.set(element,{url,title:video.title||pageTitle(doc)});
     }
     return Array.from(found,([element,info])=>({element,info}));
   }
-  root.YVD = {sourceURL,extract,publicURL,videoURL,currentVideo,genericCards};
+  root.YVD = {sourceURL,extract,publicURL,videoURL,currentVideo,genericCards,isAd};
   if(typeof module !== 'undefined') module.exports=root.YVD;
 })(typeof globalThis!=='undefined'?globalThis:this);

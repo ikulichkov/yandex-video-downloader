@@ -150,7 +150,7 @@ test('generic current video supports Mail, OK, direct HTML5 media and rejects lo
  const doc={title:'Любой сайт',querySelector:()=>null};
  for(const url of ['https://my.mail.ru/mail/person/video/_myvideo/26.html','https://ok.ru/video/222405395773','https://example.com/video/1'])assert.equal(YVD.currentVideo(doc,url).url,url);
  const media={currentSrc:'https://cdn.example.com/clip.mp4'};
- assert.equal(YVD.currentVideo({title:'HTML5',querySelector:s=>s==='video'?media:null},'https://example.com/article').url,media.currentSrc);
+ assert.equal(YVD.currentVideo({title:'HTML5',querySelector:s=>s==='video'?media:null},'https://example.com/article').url,'https://example.com/article');
  for(const url of ['file:///tmp/a','https://u:p@example.com/video/1','http://127.0.0.1/video/1','http://192.168.1.1/clip.mp4'])assert.equal(YVD.publicURL(url),null);
 });
 test('floating current panel is off by default while popup still receives current video',async()=>{
@@ -275,4 +275,18 @@ test('saved card has a compact green check and still permits another download',a
  await new Promise(r=>setImmediate(r));let button=cardControls(body)[0].children.find(x=>x.tag==='button');assert.equal(button.textContent,'✓');assert.equal(button.className,'downloaded');assert.ok(button.attrs['aria-label'].includes('Скачать ещё'));
  await button.listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.at(-1).type,'yvd-start');
  list=[];storageChanged({downloadedVideos:{newValue:[]}},'local');await new Promise(r=>setImmediate(r));button=cardControls(body)[0].children.find(x=>x.tag==='button');assert.equal(button.textContent,'↓');assert.notEqual(button.className,'downloaded');
+});
+
+test('ad-first players never select ad src as current content; explicitly marked ad cards are excluded',()=>{
+ const ad={currentSrc:'https://cdn.example/advert.mp4',closest:()=>({})};
+ const main={currentSrc:'https://cdn.example/main.mp4',closest:()=>null};
+ const page='https://publisher.example/articles/42';
+ const doc={title:'Main content',querySelector:()=>null,querySelectorAll:s=>s==='video'?[ad,main]:[]};
+ assert.equal(YVD.currentVideo(doc,page).url,page);
+ main.currentSrc='https://cdn.example/preroll.mp4';assert.equal(YVD.currentVideo(doc,page).url,page);
+ doc.querySelectorAll=s=>s==='video'?[ad]:[];assert.equal(YVD.currentVideo(doc,page),null);
+ assert.equal(YVD.isAd({name:'google_ads_iframe_42',closest:()=>null}),true);
+ assert.equal(YVD.extract({closest:()=>({}),querySelector:()=>{throw Error('must not extract ad')}}),null);
+ const anchor={href:'https://publisher.example/video/42',closest:()=>({}),getClientRects:()=>[{}]};
+ assert.equal(YVD.genericCards({querySelectorAll:s=>s==='a[href]'?[anchor]:[]}).length,0);
 });
