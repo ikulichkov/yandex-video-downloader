@@ -65,7 +65,13 @@ def send(msg):
     with write_lock:
         sys.stdout.buffer.write(struct.pack('@I',len(data))+data);sys.stdout.buffer.flush()
 
-def worker(url):
+def format_selector(quality, ffmpeg):
+    if quality not in ('best','1080','720','480','360'): raise ValueError('invalid quality')
+    protocol="[protocol~='^(https?|m3u8(_native)?|http_dash_segments)$']"
+    height='' if quality=='best' else f'[height<={quality}]'
+    return f'bv*{height}{protocol}+ba{protocol}/b{height}{protocol}' if ffmpeg else f'b{height}{protocol}'
+
+def worker(url, quality='best'):
     # Separate process permits real cancellation, including extractor/ffmpeg children.
     def emit(**msg): print(json.dumps(msg,ensure_ascii=False),flush=True)
     try:
@@ -87,14 +93,13 @@ def worker(url):
             def warning(self,*a): pass
             def error(self,*a): pass
         ffmpeg=next((p for p in [which('ffmpeg'),'/opt/homebrew/bin/ffmpeg','/usr/local/bin/ffmpeg'] if p and Path(p).is_file()),None)
-        protocol="[protocol~='^(https?|m3u8(_native)?|http_dash_segments)$']"
         opts={'quiet':True,'no_warnings':True,'logger':Quiet(),'noplaylist':True,'playlistend':1,
               'socket_timeout':25,'retries':2,'fragment_retries':2,'continuedl':True,
-              'outtmpl':str(target/'%(title).140B [%(id)s].%(ext)s'),'restrictfilenames':False,
+              'outtmpl':str(target/'%(title).140B [%(id)s] [%(height)sp].%(ext)s'),'restrictfilenames':False,
               'windowsfilenames':True,'overwrites':False,'progress_hooks':[progress],
-              'format':f'bv*[height<=1080]{protocol}+ba{protocol}/b[height<=1080]{protocol}/b{protocol}' if ffmpeg else f'b[height<=1080]{protocol}/b{protocol}',
+              'format':format_selector(quality,ffmpeg),
               'enable_file_urls':False,'hls_prefer_native':True,'external_downloader':{'default':'native'},
-              'merge_output_format':'mp4','max_filesize':4*1024**3,'match_filter':lambda info,**kw: 'Прямые эфиры не поддерживаются' if info.get('is_live') else None}
+              'merge_output_format':'mp4','match_filter':lambda info,**kw: 'Прямые эфиры не поддерживаются' if info.get('is_live') else None}
         if ffmpeg: opts['ffmpeg_location']=str(Path(ffmpeg).parent)
         node=next((p for p in [which('node'),'/opt/homebrew/bin/node','/usr/local/bin/node'] if p and Path(p).is_file()),None)
         if node:opts['js_runtimes']={'node':{'path':node}}
@@ -116,13 +121,13 @@ def worker(url):
 
 def main():
     if len(sys.argv)>1 and sys.argv[1]=='--worker':
-        return worker(sys.argv[2]) if len(sys.argv)==3 and valid_url(sys.argv[2]) else 2
+        return worker(sys.argv[2],sys.argv[3] if len(sys.argv)==4 else 'best') if len(sys.argv) in (3,4) and valid_url(sys.argv[2]) and (len(sys.argv)==3 or sys.argv[3] in ('best','1080','720','480','360')) else 2
     if len(sys.argv)!=2 or sys.argv[1]!=f'chrome-extension://{EXT_ID}/': return 2
     input_stream=os.fdopen(os.dup(sys.stdin.fileno()), 'rb', buffering=0)
     try: msg=read_message(input_stream)
     except (EOFError,ValueError,json.JSONDecodeError): return 2
     if msg.get('action')=='ping':
-        send({'status':'ready','version':'2.0.0'});return 0
+        send({'status':'ready','version':'2.1.0'});return 0
     if msg.get('action')=='open-folder':
         try:
             target=Path.home()/'Downloads'/'Яндекс Видео'
@@ -133,7 +138,10 @@ def main():
             send({'status':'error'});return 1
     if msg.get('action')!='download' or not valid_url(msg.get('url')):
         send({'status':'error','text':'Недопустимая ссылка на видео.'});return 2
-    process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker',msg['url']],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,start_new_session=True)
+    quality=msg.get('quality','best')
+    if quality not in ('best','1080','720','480','360'):
+        send({'status':'error','text':'Недопустимое качество видео.'});return 2
+    process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker',msg['url'],quality],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,start_new_session=True)
     cancelled=threading.Event();finished=threading.Event()
     def stop():
         if process.poll() is None:

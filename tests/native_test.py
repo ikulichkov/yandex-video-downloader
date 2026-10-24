@@ -52,3 +52,15 @@ with tempfile.TemporaryDirectory() as tmp,patch.object(Path,'home',return_value=
  assert host.worker('https://example.com/video/collection')==1
  assert not Playlist.processed
  assert json.loads(emit.call_args.args[0])['status']=='error'
+
+# Requested caps must never silently fall through to a higher-resolution format.
+for quality in ['best','1080','720','480','360']:
+ for ffmpeg in [True,False]:
+  selector=host.format_selector(quality,ffmpeg)
+  assert "protocol~=" in selector
+  if quality=='best':assert 'height' not in selector
+  else:
+   assert all(f'[height<={quality}]' in part for part in selector.split('/'))
+try:host.format_selector('1080]+exec',True)
+except ValueError:pass
+else:raise AssertionError('unvalidated quality')

@@ -1,7 +1,7 @@
 const jobs = new Map();
 const HOST = 'ru.local.yandex_video_downloader';
 const allowedPage = value => Boolean(YVD.publicURL(value));
-importScripts('cards.js');
+importScripts('cards.js','updates.js');
 function notify(job, state) {
   job.state={url:job.url,...state};
   chrome.tabs.sendMessage(job.tab,{type:'yvd-state',...job.state}).catch(()=>{});
@@ -43,7 +43,8 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
       const error=chrome.runtime.lastError;
       if(job.active){job.active=false;notify(job,{status:'error',text:error?'Помощник недоступен. Выполните установку по инструкции расширения.':'Помощник завершился до окончания скачивания.'});}
     });
-    port.postMessage({action:'download',url});reply({ok:true});
+    const quality=['best','1080','720','480','360'].includes(msg.quality)?msg.quality:'best';
+    port.postMessage({action:'download',url,quality});reply({ok:true});
   } catch {job.active=false;notify(job,{status:'error',text:'Не удалось запустить локальный помощник.'});reply({error:'Помощник недоступен.'});}
 });
 chrome.tabs.onRemoved.addListener(tab=>{for(const [url,j] of jobs)if(j.tab===tab){if(j.active)j.port?.postMessage({action:'cancel'});else jobs.delete(url);}});

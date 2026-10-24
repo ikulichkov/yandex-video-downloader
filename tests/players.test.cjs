@@ -30,7 +30,7 @@ test('worker accepts exact VK video and Yandex; rejects other senders; keeps pro
  const chrome={runtime:{onMessage:event(),lastError:null,connectNative(){const p={onMessage:event(),onDisconnect:event(),sent:[],postMessage(m){this.sent.push(m)},disconnect(){for(const f of this.onDisconnect.listeners)f()}};ports.push(p);return p}},tabs:{onRemoved:event(),sendMessage(tab,m){sent.push(m);return Promise.resolve()}}};
  vm.runInNewContext(fs.readFileSync(require.resolve('../background.js'),'utf8'),{chrome,URL,YVD,Map,importScripts(){}});
  const listener=chrome.runtime.onMessage.listeners[0];
- function send(type,url,senderURL=vk){let reply;listener({type,url},{tab:{id:1},url:senderURL},x=>reply=x);return reply;}
+ function send(type,url,senderURL=vk,quality='best'){let reply;listener({type,url,quality},{tab:{id:1},url:senderURL},x=>reply=x);return reply;}
  assert.equal(send('yvd-start',vk,'https://localhost/video-123_456'),undefined);
  assert.equal(send('yvd-start',vk,'file:///tmp/page'),undefined);
  assert.ok(Array.isArray(send('yvd-status',null,'https://vkvideo.ru/')));
@@ -40,7 +40,7 @@ test('worker accepts exact VK video and Yandex; rejects other senders; keeps pro
  ports[0].onMessage.listeners[0]({status:'progress',percent:50,text:'50%'});assert.equal(sent.at(-1).percent,50);
  assert.ok(send('yvd-cancel',vk).ok);assert.equal(ports[0].sent.at(-1).action,'cancel');
  ports[0].onMessage.listeners[0]({status:'done',filename:'file.mp4'});assert.equal(sent.at(-1).status,'done');
- assert.ok(send('yvd-start',dzen,'https://ya.ru/video/preview/1').ok);
+ assert.ok(send('yvd-start',dzen,'https://ya.ru/video/preview/1','720').ok);assert.equal(ports.at(-1).sent[0].quality,'720');
 });
 function findUI(node,id){if(node.id===id)return node;for(const child of [...node.children,...(node.shadowRoot?[node.shadowRoot]:[])]){const found=findUI(child,id);if(found)return found;}return undefined;}
 function cardControls(body){return body.children.flatMap(h=>h.shadowRoot?.children||[]).filter(x=>(x.className||'').split(' ').includes('card'));}
@@ -57,13 +57,13 @@ test('current-video panel updates across SPA routes, sends exact URL, and remove
  const body=new El('body'),requests=[],loc={href:vk};let interval,receive;
  const doc={body,title:'VK current',createElement:tag=>new El(tag),getElementById:id=>findUI(body,id),querySelector:()=>null,querySelectorAll:()=>[]};
  const chrome={runtime:{onMessage:{addListener:f=>receive=f},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?[]:{ok:true}}}};
- let storageChanged;const prefs={placement:'top-left',showCurrentPanel:true};chrome.storage={local:{get:async()=>prefs},onChanged:{addListener:f=>storageChanged=f}};
+ let storageChanged;const prefs={placement:'top-left',showCurrentPanel:true,quality:'480'};chrome.storage={local:{get:async()=>prefs},onChanged:{addListener:f=>storageChanged=f}};
  const context={document:doc,location:loc,chrome,YVD,Element:El,Map,JSON,MutationObserver:class{observe(){}},window:{addEventListener(){}},setInterval:f=>interval=f,setTimeout,clearTimeout};
  vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),context);
  await Promise.resolve();
  let panel=doc.getElementById('yvd-current');assert.ok(panel);assert.equal(body.children.length,1);
  let button=panel.children.find(x=>x.tag==='button');assert.equal(button.textContent,'↓ Скачать текущее видео');
- await button.listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.at(-1).url,vk);
+ await button.listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.at(-1).url,vk);assert.equal(requests.at(-1).quality,'480');
  receive({type:'yvd-state',url:vk,status:'progress',text:'50%'});
  button=panel.children.find(x=>x.tag==='button');assert.equal(button.textContent,'Отменить');
  await button.listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.at(-1).type,'yvd-cancel');
@@ -77,7 +77,8 @@ test('manifest identity retained; code parses; exact requested video pages cover
  const manifest=JSON.parse(fs.readFileSync(require.resolve('../manifest.json'),'utf8'));
  const crypto=require('node:crypto'),hex=crypto.createHash('sha256').update(Buffer.from(manifest.key,'base64')).digest('hex').slice(0,32);
  assert.equal([...hex].map(x=>String.fromCharCode(97+parseInt(x,16))).join(''),'hdokhbookocbnojobgeihfenlfgkfchh');
- assert.deepEqual(manifest.permissions,['nativeMessaging','storage']);
+ assert.deepEqual(manifest.permissions,['nativeMessaging','storage','alarms']);
+ assert.deepEqual(manifest.host_permissions,['https://raw.githubusercontent.com/*']);
  assert.ok(manifest.content_scripts[0].matches.includes('https://*/*'));
  for(const file of ['cards.js','content.js','background.js'])new vm.Script(fs.readFileSync(require.resolve('../'+file),'utf8'));
 });
@@ -196,4 +197,31 @@ test('overlay clears before route rescan and hides cards covered by a player at 
  card.isConnected=true;timers.shift()();assert.equal(cardControls(body).length,1);
  events.pagehide();assert.equal(cardControls(body).length,0);
  events.pageshow();timers.shift()();assert.equal(cardControls(body).length,1);
+});
+
+test('version checks compare numeric components, cache safely, reject invalid metadata and restrict popup caller',async()=>{
+ const {newer}=require('../updates.js');assert.ok(newer('2.10.0','2.9.0'));assert.ok(!newer('2.1','2.1.0'));assert.ok(!newer('<script>','2.0'));assert.ok(!newer('1.9','2.0'));
+ const id='update-test',calls=[],messages=event(),alarms=event();let saved,body='{"version":"2.10.0","download":"https://evil.example/"}',fail=false;
+ const chrome={runtime:{id,getURL:p=>'chrome-extension://'+id+'/'+p,getManifest:()=>({version:'2.1.0'}),onMessage:messages},storage:{local:{get:async()=>({updateCheck:saved}),set:async x=>saved=x.updateCheck}},alarms:{onAlarm:alarms,get:async()=>null,create:async(...args)=>calls.push({alarm:args})}};
+ const fetch=async(url,opts)=>{calls.push({url,opts});if(fail)throw Error('offline');return {ok:true,text:async()=>body}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../updates.js'),'utf8'),{chrome,fetch,AbortSignal,Date,JSON,module:{exports:{}}});
+ await new Promise(r=>setImmediate(r));assert.equal(saved.latest,'2.10.0');assert.equal(calls.filter(x=>x.url).length,1);
+ const listener=messages.listeners[0];let reply;
+ assert.equal(listener({type:'yvd-check-update'},{id,url:'https://example.com/'},r=>reply=r),undefined);
+ const popup={id,url:chrome.runtime.getURL('popup.html')};
+ listener({type:'yvd-check-update'},popup,r=>reply=r);await new Promise(r=>setImmediate(r));assert.equal(calls.filter(x=>x.url).length,1);assert.ok(reply.available);assert.equal(reply.archive,'https://github.com/ikulichkov/yandex-video-downloader/archive/refs/heads/main.zip');
+ body='{"version":"not-a-version"}';listener({type:'yvd-check-update',force:true},popup,r=>reply=r);await new Promise(r=>setImmediate(r));assert.equal(reply.status,'error');assert.equal(reply.latest,'2.10.0');
+ fail=true;listener({type:'yvd-check-update',force:true},popup,r=>reply=r);await new Promise(r=>setImmediate(r));assert.equal(reply.status,'error');assert.ok(reply.available);
+ for(const c of calls.filter(x=>x.url)){assert.equal(c.url,'https://raw.githubusercontent.com/ikulichkov/yandex-video-downloader/main/manifest.json');assert.equal(c.opts.credentials,'omit');assert.equal(c.opts.redirect,'error');}
+ assert.equal(calls.find(x=>x.alarm).alarm[1].periodInMinutes,360);
+});
+
+test('popup offers update archive and persists user quality',async()=>{
+ const elements=new Map(),requests=[];
+ for(const id of ['video-title','download','status','page-hint','helper','check-helper','folder','folder-status','version','placement','show-current-panel','settings-status','quality','update-status','check-update','download-update'])elements.set(id,new El('div'));
+ const chrome={runtime:{getManifest:()=>({version:'2.1.0'}),sendMessage:async m=>{requests.push(m);return m.type==='yvd-check-update'?{status:'ok',available:true,current:'2.1.0',latest:'2.2.0',archive:'https://evil.example/'}:{status:'ready'}}},tabs:{query:async()=>[],sendMessage:async()=>null},storage:{local:{get:async()=>({placement:'top-left',showCurrentPanel:false,quality:'720'}),set:async m=>requests.push(m)}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../popup.js'),'utf8'),{document:{getElementById:id=>elements.get(id)},chrome,setInterval(){}});
+ await new Promise(r=>setImmediate(r));assert.equal(elements.get('quality').value,'720');assert.equal(elements.get('download-update').hidden,false);assert.equal(elements.get('download-update').href,'https://github.com/ikulichkov/yandex-video-downloader/archive/refs/heads/main.zip');
+ elements.get('quality').value='best';await elements.get('quality').listeners.change();assert.equal(requests.at(-1).quality,'best');
+ await elements.get('check-update').listeners.click();assert.equal(requests.at(-1).force,true);
 });

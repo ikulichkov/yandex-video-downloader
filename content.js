@@ -1,6 +1,6 @@
 (() => {
   const states=new Map(),records=new Map();
-  const defaults={placement:'top-left',showCurrentPanel:false};
+  const defaults={placement:'top-left',showCurrentPanel:false,quality:'best'};
   const placements=new Set(['separate','top-left','top-right','bottom-left','bottom-right']);
   let preferences={...defaults},host,root,panel,timer=null,scrollFrame=null;
   const active=s=>['starting','progress','processing'].includes(s?.status);
@@ -45,7 +45,7 @@
     button.addEventListener('click',async e=>{
       e.preventDefault();e.stopPropagation();
       if(routeChanged()){schedule();return;}
-      try{const reply=await chrome.runtime.sendMessage({type:active(states.get(info.url))?'yvd-cancel':'yvd-start',url:info.url});if(reply?.error)states.set(info.url,{status:'error',text:reply.error});}
+      try{const reply=await chrome.runtime.sendMessage({type:active(states.get(info.url))?'yvd-cancel':'yvd-start',url:info.url,quality:preferences.quality});if(reply?.error)states.set(info.url,{status:'error',text:reply.error});}
       catch{states.set(info.url,{status:'error',text:'Обновите страницу после обновления расширения.'});}
       paint();
     });
@@ -104,12 +104,12 @@
     const current=YVD.currentVideo(document,location.href),url=current?.url||YVD.publicURL(location.href);
     if(msg.type==='yvd-page-info'){reply({supported:true,current,state:states.get(url)||null,cards:records.size,page:{url:YVD.publicURL(location.href),title:document.title.slice(0,200)}});return;}
     if(!url){reply({error:'Откройте публичную страницу с видео.'});return;}
-    chrome.runtime.sendMessage({type:active(states.get(url))?'yvd-cancel':'yvd-start',url}).then(reply).catch(()=>reply({error:'Обновите страницу видео.'}));return true;
+    chrome.runtime.sendMessage({type:active(states.get(url))?'yvd-cancel':'yvd-start',url,quality:preferences.quality}).then(reply).catch(()=>reply({error:'Обновите страницу видео.'}));return true;
   });
   chrome.runtime.sendMessage({type:'yvd-status'}).then(list=>{for(const state of list||[])states.set(state.url,state);paint();}).catch(()=>{});
-  function apply(values){preferences={placement:placements.has(values.placement)?values.placement:defaults.placement,showCurrentPanel:values.showCurrentPanel===true};positionAll();paint();}
+  function apply(values){preferences={placement:placements.has(values.placement)?values.placement:defaults.placement,showCurrentPanel:values.showCurrentPanel===true,quality:['best','1080','720','480','360'].includes(values.quality)?values.quality:'best'};positionAll();paint();}
   chrome.storage?.local?.get(defaults).then(apply).catch(()=>{});
-  chrome.storage?.onChanged?.addListener((changes,area)=>{if(area==='local'&&(changes.placement||changes.showCurrentPanel))chrome.storage.local.get(defaults).then(apply);});
+  chrome.storage?.onChanged?.addListener((changes,area)=>{if(area==='local'&&(changes.placement||changes.showCurrentPanel||changes.quality))chrome.storage.local.get(defaults).then(apply);});
   window.addEventListener('scroll',()=>{if(scrollFrame===null){scrollFrame=requestAnimationFrame(()=>{scrollFrame=null;positionAll();});}schedule();},{passive:true});
   window.addEventListener('resize',()=>{positionAll();schedule();});window.addEventListener('popstate',schedule);
   document.addEventListener?.('loadedmetadata',schedule,true);document.addEventListener?.('load',e=>{if(e.target?.tagName==='IMG')schedule();},true);

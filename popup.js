@@ -40,14 +40,25 @@
   el('version').textContent='v'+chrome.runtime.getManifest().version;
   chrome.tabs.query({active:true,currentWindow:true}).then(tabs=>{tabId=tabs[0]?.id??null;return readPage();}).catch(()=>{page=null;render();});
   if(el('placement')){
-    const defaults={placement:'top-left',showCurrentPanel:false};
-    chrome.storage.local.get(defaults).then(p=>{el('placement').value=p.placement;el('show-current-panel').checked=p.showCurrentPanel===true;}).catch(()=>{});
+    const defaults={placement:'top-left',showCurrentPanel:false,quality:'best'};
+    chrome.storage.local.get(defaults).then(p=>{el('placement').value=p.placement;el('show-current-panel').checked=p.showCurrentPanel===true;if(el('quality'))el('quality').value=p.quality||'best';}).catch(()=>{});
     const save=async()=>{
-      await chrome.storage.local.set({placement:el('placement').value,showCurrentPanel:el('show-current-panel').checked});
+      await chrome.storage.local.set({placement:el('placement').value,showCurrentPanel:el('show-current-panel').checked,quality:el('quality')?.value||'best'});
       el('settings-status').textContent='Сохранено. Кнопки на открытых страницах обновятся автоматически.';
     };
-    el('placement').addEventListener('change',save);el('show-current-panel').addEventListener('change',save);
+    el('quality')?.addEventListener('change',save);el('placement').addEventListener('change',save);el('show-current-panel').addEventListener('change',save);
   }
+  async function checkUpdate(force=false){
+    const status=el('update-status'),button=el('check-update'),link=el('download-update');
+    button.disabled=true;status.textContent='Проверяю новую версию…';link.hidden=true;
+    try{
+      const result=await chrome.runtime.sendMessage({type:'yvd-check-update',force});
+      status.textContent=result?.available?`Доступна версия ${result.latest} (установлена ${result.current}).${result.status==='error'?' Последняя проверка без сети.':''}`:result?.status==='ok'?`Установлена актуальная версия ${result.current}.`:'Не удалось проверить обновления. Попробуйте позже.';
+      if(result?.available){link.href='https://github.com/ikulichkov/yandex-video-downloader/archive/refs/heads/main.zip';link.textContent=`↓ Скачать обновление ${result.latest} · ZIP`;link.hidden=false;}
+    }catch{status.textContent='Не удалось проверить обновления. Попробуйте позже.';}
+    finally{button.disabled=false;}
+  }
+  if(el('check-update')){el('check-update').addEventListener('click',()=>checkUpdate(true));checkUpdate();}
   checkHelper();
   setInterval(readPage,1000);
 })();
