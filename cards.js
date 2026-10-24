@@ -70,7 +70,7 @@
       let node=anchor.parentElement,chosen=null;
       for(let depth=0;node&&depth<4;depth++,node=node.parentElement){
         if(['BODY','HTML'].includes(node.tagName))break;
-        if(!node.querySelector('img,picture,video'))continue;
+        if(!node.querySelector('img,picture,video,canvas,[role="img"],[style*="background-image"]'))continue;
         const urls=new Set(Array.from(node.querySelectorAll('a[href]')).map(a=>videoURL(a.href)).filter(Boolean));
         const rect=node.getBoundingClientRect();
         if(urls.size!==1||rect.height>600||rect.width>1100)break;

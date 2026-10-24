@@ -32,3 +32,6 @@ with patch.object(host.socket,'getaddrinfo',return_value=[(2,1,6,'',('127.0.0.1'
  else:raise AssertionError('private DNS resolution was accepted')
 with patch.object(host.socket,'getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
  host.install_public_network_guard();assert host.socket.getaddrinfo('example.com',443)
+
+assert not host.valid_url('http://224.0.0.1/video.mp4')
+assert 'требует вход' in host.error_message(ValueError('Sign in to confirm you are not a bot'))

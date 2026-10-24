@@ -7,6 +7,10 @@ HOST = 'ru.local.yandex_video_downloader'
 ROOT = Path(__file__).resolve().parent.parent
 EXT_ID = (ROOT/'extension-id.txt').read_text().strip()
 
+def is_public_address(value):
+    address=ipaddress.ip_address(value)
+    return address.is_global and not address.is_multicast and not address.is_reserved
+
 def valid_url(value):
     if not isinstance(value,str) or len(value)>8192 or any(ord(c)<33 for c in value) or '\\' in value:return False
     try:
@@ -14,7 +18,7 @@ def valid_url(value):
         if u.scheme not in ('http','https') or u.username or u.password or not host or '%' in host:return False
         if u.port is not None and not 1<=u.port<=65535:return False
         if host=='localhost' or host.endswith(('.local','.localhost','.internal','.invalid')):return False
-        try:return ipaddress.ip_address(host).is_global
+        try:return is_public_address(host)
         except ValueError:return '.' in host
     except (ValueError,TypeError):return False
 
@@ -23,7 +27,7 @@ def install_public_network_guard():
     original=socket.getaddrinfo
     def public_getaddrinfo(host,port,*args,**kwargs):
         answers=original(host,port,*args,**kwargs)
-        if not answers or any(not ipaddress.ip_address(item[4][0].split('%')[0]).is_global for item in answers):
+        if not answers or any(not is_public_address(item[4][0].split('%')[0]) for item in answers):
             raise OSError('Private/local network targets are disabled')
         return answers
     socket.getaddrinfo=public_getaddrinfo

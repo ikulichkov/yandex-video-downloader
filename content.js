@@ -50,7 +50,7 @@
         for(const key of ['top','right','bottom','left'])ui.style.removeProperty(key);
         if(preferences.placement!=='separate'){
           const outer=card.getBoundingClientRect();
-          const boxes=Array.from(card.querySelectorAll('img,video,picture')).map(e=>e.getBoundingClientRect?.()).filter(b=>b&&b.width>30&&b.height>30).sort((a,b)=>b.width*b.height-a.width*a.height);
+          const boxes=Array.from(card.querySelectorAll('img,video,picture,canvas,[role="img"],[style*="background-image"]')).map(e=>e.getBoundingClientRect?.()).filter(b=>b&&b.width>30&&b.height>30).sort((a,b)=>b.width*b.height-a.width*a.height);
           const box=boxes[0]||outer;
           if(box.width>30&&box.height>30){
             ui.style[preferences.placement.startsWith('top')?'top':'bottom']=Math.max(0,preferences.placement.startsWith('top')?box.top-outer.top+8:outer.bottom-box.bottom+8)+'px';
