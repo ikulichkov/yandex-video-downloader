@@ -123,3 +123,35 @@ for info in [
  except ValueError as exc:assert 'multiple videos' in str(exc)
  else:raise AssertionError('ambiguous/unbounded/cyclic source was accepted')
 assert 'Нажмите кнопку' not in host.error_message(ValueError('multiple videos'))
+
+# File actions are constrained to saved media; legacy filename-only records are safe.
+with tempfile.TemporaryDirectory() as tmp:
+ target=Path(tmp)/'Downloads'/'Яндекс Видео';target.mkdir(parents=True);file=target/'video.mp4';file.write_bytes(b'video');exe=target/'run.exe';exe.write_bytes(b'executable');outside=Path(tmp)/'outside.mp4';outside.write_bytes(b'outside')
+ with patch.object(Path,'home',return_value=Path(tmp)):
+  assert host.downloaded_file('video.mp4',media_only=True)==file.resolve()
+  for bad in [str(exe),str(outside),'../outside.mp4','missing.mp4']:
+   try:host.downloaded_file(bad,media_only=True)
+   except ValueError:pass
+   else:raise AssertionError('unsafe file action')
+ for action in ['open-file','reveal-file']:
+  output=io.BytesIO()
+  with patch.object(sys,'argv',[str(root/'native/host.py'),origin]),patch.object(host.os,'dup',return_value=0),patch.object(host.os,'fdopen',return_value=io.BytesIO(frame({'action':action,'filename':'video.mp4'}))),patch.object(Path,'home',return_value=Path(tmp)),patch.object(host,'open_download') as opened,patch.object(sys,'stdout') as stdout:
+   stdout.buffer=output;assert host.main()==0
+   opened.assert_called_once_with(file.resolve(),reveal=action=='reveal-file')
+  assert host.read_message(io.BytesIO(output.getvalue()))['status']=='done'
+ with patch.object(host.subprocess,'run') as run:
+  run.return_value.returncode=0;host.open_download(file,reveal=True);assert run.call_args.args[0]==['/usr/bin/open','-R',str(file)]
+ with patch.object(sys,'platform','win32'),patch.object(host.os,'startfile',create=True) as start,patch.object(host,'windows_reveal') as reveal:
+  host.open_download(file);start.assert_called_once_with(str(file));host.open_download(file,reveal=True);reveal.assert_called_once_with(file)
+
+# Windows reveal uses a full-width PIDL, selects exactly the file, and releases COM memory.
+import ctypes
+shell=MagicMock();ole=MagicMock();ole.CoInitialize.return_value=0
+shell.SHParseDisplayName.side_effect=lambda name,context,out,flags,attrs: setattr(out._obj,'value',123) or 0
+shell.SHOpenFolderAndSelectItems.return_value=0
+with patch.object(ctypes,'windll',SimpleNamespace(shell32=shell,ole32=ole),create=True):
+ host.windows_reveal(Path('/fixture/video.mp4'))
+ assert shell.SHOpenFolderAndSelectItems.call_args.args[0].value==123
+ assert shell.SHOpenFolderAndSelectItems.call_args.args[1:]==(0,None,0)
+ assert ole.CoTaskMemFree.call_args.args[0].value==123
+ ole.CoUninitialize.assert_called_once()

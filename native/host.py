@@ -100,6 +100,41 @@ def resolve_video(ydl,url):
         return info
     return visit(ydl.extract_info(url,download=False,process=False))
 
+def downloaded_file(value,media_only=False):
+    if not isinstance(value,str) or not value: raise ValueError('missing file')
+    target=(Path.home()/'Downloads'/'Яндекс Видео').resolve()
+    file=Path(value)
+    if not file.is_absolute():
+        if file.name!=value: raise ValueError('relative path')
+        file=target/file
+    if file.is_symlink() or not file.is_file() or file.parent.resolve()!=target: raise ValueError('file outside downloads or missing')
+    if media_only and file.suffix.lower() not in {'.mp4','.mkv','.webm','.mov','.m4v','.avi','.ts','.m2ts','.mpg','.mpeg','.ogv','.flv','.3gp'}: raise ValueError('not a media file')
+    return file
+
+def windows_reveal(file):
+    import ctypes
+    shell=ctypes.windll.shell32;ole=ctypes.windll.ole32
+    shell.SHParseDisplayName.argtypes=[ctypes.c_wchar_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_void_p),ctypes.c_ulong,ctypes.POINTER(ctypes.c_ulong)]
+    shell.SHOpenFolderAndSelectItems.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.POINTER(ctypes.c_void_p),ctypes.c_ulong]
+    ole.CoTaskMemFree.argtypes=[ctypes.c_void_p]
+    result=ole.CoInitialize(None)
+    if result<0: raise OSError('COM initialization failed')
+    pidl=ctypes.c_void_p()
+    try:
+        if shell.SHParseDisplayName(str(file),None,ctypes.byref(pidl),0,None)!=0: raise OSError('file lookup failed')
+        if shell.SHOpenFolderAndSelectItems(pidl,0,None,0)!=0: raise OSError('file reveal failed')
+    finally:
+        if pidl: ole.CoTaskMemFree(pidl)
+        ole.CoUninitialize()
+
+def open_download(file,reveal=False):
+    if sys.platform=='win32':
+        if reveal: windows_reveal(file)
+        else: os.startfile(str(file))
+    else:
+        result=subprocess.run(['/usr/bin/open',*(['-R'] if reveal else []),str(file)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+        if result.returncode: raise OSError('open failed')
+
 def worker(url, quality='best'):
     # Separate process permits real cancellation, including extractor/ffmpeg children.
     def emit(**msg): print(json.dumps(msg,ensure_ascii=False),flush=True)
@@ -164,7 +199,7 @@ def main():
     try: msg=read_message(input_stream)
     except (EOFError,ValueError,json.JSONDecodeError): return 2
     if msg.get('action')=='ping':
-        send({'status':'ready','version':'2.2.3'});return 0
+        send({'status':'ready','version':'2.2.5'});return 0
     if msg.get('action')=='open-folder':
         try:
             target=Path.home()/'Downloads'/'Яндекс Видео'
@@ -174,11 +209,15 @@ def main():
             send({'status':'done' if result_code==0 else 'error'});return 0
         except (OSError,subprocess.TimeoutExpired):
             send({'status':'error'});return 1
+    if msg.get('action') in ('open-file','reveal-file'):
+        try:
+            file=downloaded_file(msg.get('filename'),media_only=True)
+            open_download(file,reveal=msg['action']=='reveal-file');send({'status':'done'});return 0
+        except Exception:
+            send({'status':'error','text':'Не удалось открыть файл. Возможно, он перемещён или удалён.'});return 1
     if msg.get('action')=='trash-file':
         try:
-            target=(Path.home()/'Downloads'/'Яндекс Видео').resolve()
-            file=Path(msg.get('filename',''))
-            if file.is_symlink() or not file.is_file() or file.parent.resolve()!=target: raise ValueError('path')
+            file=downloaded_file(msg.get('filename'))
             from send2trash import send2trash
             send2trash(str(file));send({'status':'done'});return 0
         except Exception:

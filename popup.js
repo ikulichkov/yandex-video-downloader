@@ -20,10 +20,10 @@
     try{const result=await chrome.runtime.sendMessage({type:'yvd-helper-status'});helperReady=result?.status==='ready';if(el('helper-hint')){
       let outdated=false;
       if(helperReady&&/^\d+\.\d+\.\d+$/.test(result.version||'')){
-        const actual=result.version.split('.').map(Number),required=[2,2,3];
+        const actual=result.version.split('.').map(Number),required=[2,2,5];
         for(let i=0;i<3;i++)if(actual[i]!==required[i]){outdated=actual[i]<required[i];break;}
       }
-      el('helper-hint').textContent=outdated?'Помощник '+result.version+': для исправления выбора роликов обновите его — Windows: install-windows.cmd; macOS: install.command из нового архива.':helperReady?'':result?.text||'Установите локальный помощник: Windows — install-windows.cmd, macOS — install.command из архива расширения.';
+      el('helper-hint').textContent=outdated?'Помощник '+result.version+': для новых функций обновите его — Windows: install-windows.cmd; macOS: install.command из нового архива.':helperReady?'':result?.text||'Установите локальный помощник: Windows — install-windows.cmd, macOS — install.command из архива расширения.';
     }}
     catch{helperReady=false;if(el('helper-hint'))el('helper-hint').textContent='Нет связи с локальным помощником. Windows: install-windows.cmd; macOS: install.command из архива расширения.';}
     el('helper').textContent=helperReady?'● Помощник готов':'● Помощник недоступен';
@@ -66,6 +66,17 @@
     finally{button.disabled=false;}
   }
   if(el('check-update')){el('check-update').addEventListener('click',()=>checkUpdate(true));checkUpdate();}
+  const concurrency=el('max-concurrent-downloads');
+  if(concurrency){
+    chrome.storage.local.get({maxConcurrentDownloads:5}).then(p=>{concurrency.value=Number.isInteger(p.maxConcurrentDownloads)&&p.maxConcurrentDownloads>=1&&p.maxConcurrentDownloads<=20?p.maxConcurrentDownloads:5;}).catch(()=>{});
+    concurrency.addEventListener('change',async()=>{
+      const value=Number(concurrency.value),status=el('concurrency-status');
+      if(!Number.isInteger(value)||value<1||value>20){concurrency.setAttribute('aria-invalid','true');status.textContent='Введите целое число от 1 до 20.';return;}
+      concurrency.setAttribute('aria-invalid','false');
+      try{await chrome.storage.local.set({maxConcurrentDownloads:value});status.textContent='Сохранено. Лимит применяется к новым загрузкам; текущие продолжаются.';}
+      catch{status.textContent='Не удалось сохранить лимит. Попробуйте ещё раз.';}
+    });
+  }
   checkHelper();
   async function readDownloads(){
     const list=el('downloads');if(!list)return;
@@ -82,6 +93,7 @@
         if(busy(job))action('Остановить','yvd-cancel-job');
         else{
           if(job.status!=='done')action('Повторить','yvd-retry-job');
+          if(job.status==='done'&&job.filename){action('Открыть','yvd-open-job');action('Показать в папке','yvd-reveal-job');}
           action('Убрать из списка','yvd-remove-job');
           if(job.status==='done'&&job.filename)action('Файл в корзину','yvd-remove-job',{trashFile:true});
         }

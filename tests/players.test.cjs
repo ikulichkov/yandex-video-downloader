@@ -290,3 +290,39 @@ test('ad-first players never select ad src as current content; explicitly marked
  const anchor={href:'https://publisher.example/video/42',closest:()=>({}),getClientRects:()=>[{}]};
  assert.equal(YVD.genericCards({querySelectorAll:s=>s==='a[href]'?[anchor]:[]}).length,0);
 });
+
+test('concurrency defaults to five; saved/live limits gate starts atomically without stopping existing jobs',async()=>{
+ function boot(value,delayed=false){
+  let hydrate;const ports=[],changes=event(),chrome={runtime:{id:'limit',getURL:p=>'chrome-extension://limit/'+p,onMessage:event(),connectNative(){const p={onMessage:event(),onDisconnect:event(),sent:[],postMessage(m){this.sent.push(m)},disconnect(){}};ports.push(p);return p}},tabs:{onRemoved:event(),sendMessage:async()=>{}},storage:{onChanged:changes,local:{get:()=>delayed?new Promise(r=>hydrate=r):Promise.resolve({maxConcurrentDownloads:value}),set:async()=>{}}}};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../background.js'),'utf8'),{chrome,YVD,Map,Date,importScripts(){}});
+  const start=n=>new Promise(resolve=>{assert.equal(chrome.runtime.onMessage.listeners[0]({type:'yvd-start',url:'https://example.com/video/'+n},{id:'limit',url:vk,tab:{id:n}},resolve),true)});
+  return {ports,start,change:v=>changes.listeners[0]({maxConcurrentDownloads:{newValue:v}},'local'),hydrate:()=>hydrate({maxConcurrentDownloads:value})};
+ }
+ let h=boot(undefined);const replies=await Promise.all(Array.from({length:6},(_,n)=>h.start(n)));
+ assert.equal(replies.filter(x=>x.ok).length,5);assert.ok(replies[5].error.includes('(5)'));assert.equal(h.ports.length,5);
+ h.change(1);assert.ok((await h.start(7)).error.includes('(1)'));assert.equal(h.ports.flatMap(p=>p.sent).filter(x=>x.action==='cancel').length,0);
+ h.change(6);assert.ok((await h.start(7)).ok);assert.equal(h.ports.length,6);
+ h=boot(2,true);const pending=h.start(1);assert.equal(h.ports.length,0);h.hydrate();assert.ok((await pending).ok);assert.ok((await h.start(2)).ok);assert.ok((await h.start(3)).error.includes('(2)'));
+ h=boot(1,true);h.change(3);h.hydrate();assert.ok((await h.start(1)).ok);assert.ok((await h.start(2)).ok);assert.ok((await h.start(3)).ok);assert.ok((await h.start(4)).error.includes('(3)'));
+ h=boot(-9);for(let n=0;n<5;n++)assert.ok((await h.start(n)).ok);assert.ok((await h.start(8)).error.includes('(5)'));
+});
+
+test('popup loads default-five concurrency and saves only valid whole values',async()=>{
+ const elements=new Map(),writes=[];
+ for(const id of ['video-title','download','status','page-hint','helper','check-helper','folder','folder-status','version','max-concurrent-downloads','concurrency-status'])elements.set(id,new El('div'));
+ const chrome={runtime:{getManifest:()=>({version:'2.2.5'}),sendMessage:async()=>({status:'ready'})},tabs:{query:async()=>[]},storage:{local:{get:async defaults=>defaults,set:async v=>writes.push(v)}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../popup.js'),'utf8'),{document:{getElementById:id=>elements.get(id)},chrome,setInterval(){}});
+ await new Promise(r=>setImmediate(r));const input=elements.get('max-concurrent-downloads');assert.equal(Number(input.value),5);
+ for(const bad of ['',0,21,2.5,'abc']){input.value=bad;await input.listeners.change();assert.equal(writes.length,0);assert.equal(input.attrs['aria-invalid'],'true');}
+ input.value='7';await input.listeners.change();assert.equal(writes[0].maxConcurrentDownloads,7);assert.equal(input.attrs['aria-invalid'],'false');
+});
+
+test('open/reveal job actions are popup-only and use saved output path, never caller input',async()=>{
+ const id='file-actions',calls=[],chrome={runtime:{id,getURL:p=>'chrome-extension://'+id+'/'+p,onMessage:event(),sendNativeMessage:async(h,msg)=>{calls.push(msg);return{status:'done'}}},tabs:{onRemoved:event()},storage:{local:{get:async()=>({downloadHistory:[{url:vk,title:'Saved',status:'done',filename:'/fixed/video.mp4'}]})}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../background.js'),'utf8'),{chrome,YVD,Map,Date,importScripts(){}});
+ const listener=chrome.runtime.onMessage.listeners[0];let response;
+ listener({type:'yvd-open-job',url:vk},{id,url:vk,tab:{id:1}},r=>response=r);assert.equal(response,undefined);assert.equal(calls.length,0);
+ const send=type=>new Promise(resolve=>listener({type,url:vk,filename:'/etc/passwords'},{id,url:chrome.runtime.getURL('popup.html')},resolve));
+ assert.ok((await send('yvd-open-job')).ok);assert.equal(calls[0].action,'open-file');assert.equal(calls[0].filename,'/fixed/video.mp4');
+ assert.ok((await send('yvd-reveal-job')).ok);assert.equal(calls[1].action,'reveal-file');
+});

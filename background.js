@@ -1,12 +1,15 @@
 const jobs=new Map();
 const downloaded=new Map();
+let maxConcurrentDownloads=5,limitChanged=false;
+const validLimit=value=>Number.isInteger(value)&&value>=1&&value<=20;
 const HOST='ru.local.yandex_video_downloader';
 importScripts('cards.js','updates.js');
 const allowedPage=value=>Boolean(YVD.publicURL(value));
 const terminal=s=>['done','error','cancelled','removed'].includes(s);
 const snapshot=j=>({url:j.url,title:j.title||'Видео',quality:j.quality||'best',createdAt:j.createdAt,...j.state});
 function persist(){historyReady.then(()=>chrome.storage?.local?.set({downloadHistory:[...jobs.values()].slice(-100).map(snapshot),downloadedVideos:[...downloaded.values()].slice(-1000)})).catch(()=>{});}
-const historyReady=(chrome.storage?.local?.get(['downloadHistory','downloadedVideos'])||Promise.resolve({})).then(data=>{
+const historyReady=(chrome.storage?.local?.get(['downloadHistory','downloadedVideos','maxConcurrentDownloads'])||Promise.resolve({})).then(data=>{
+  if(!limitChanged)maxConcurrentDownloads=validLimit(data.maxConcurrentDownloads)?data.maxConcurrentDownloads:5;
   for(const item of (Array.isArray(data.downloadedVideos)?data.downloadedVideos:[]).slice(-1000))if(item&&YVD.publicURL(item.url))downloaded.set(item.url,{url:item.url,status:'done',downloaded:true,filename:typeof item.filename==='string'?item.filename:undefined});
   for(const item of (Array.isArray(data.downloadHistory)?data.downloadHistory:[]).slice(-100)){
     if(!item||!YVD.publicURL(item.url))continue;
@@ -16,6 +19,7 @@ const historyReady=(chrome.storage?.local?.get(['downloadHistory','downloadedVid
   }
   while(downloaded.size>1000)downloaded.delete(downloaded.keys().next().value);
 }).catch(()=>{});
+chrome.storage?.onChanged?.addListener((changes,area)=>{if(area==='local'&&changes.maxConcurrentDownloads){limitChanged=true;maxConcurrentDownloads=validLimit(changes.maxConcurrentDownloads.newValue)?changes.maxConcurrentDownloads.newValue:5;}});
 function notify(job,state){
   if(state.status==='done'){
     downloaded.delete(job.url);downloaded.set(job.url,{url:job.url,status:'done',downloaded:true,filename:state.filename});
@@ -32,10 +36,14 @@ function helperError(error){
   return 'Помощник завершился до окончания загрузки. Проверьте связь в окне расширения и установку помощника.';
 }
 function start(msg,tab,reply){
+  if(chrome.storage){historyReady.then(()=>startReady(msg,tab,reply)).catch(()=>reply({error:'Не удалось прочитать настройки загрузок.'}));return true;}
+  return startReady(msg,tab,reply);
+}
+function startReady(msg,tab,reply){
   const url=YVD.publicURL(msg.url);
   if(!url){reply({error:'Не найден поддерживаемый исходный ролик.'});return;}
   if(jobs.get(url)?.active){reply({error:'Это видео уже скачивается.'});return;}
-  if([...jobs.values()].filter(j=>j.active).length>=2){reply({error:'Уже скачиваются два видео. Дождитесь завершения.'});return;}
+  if([...jobs.values()].filter(j=>j.active).length>=maxConcurrentDownloads){reply({error:`Достигнут лимит одновременных загрузок (${maxConcurrentDownloads}). Дождитесь завершения или измените лимит в окне расширения.`});return;}
   if(jobs.size>=100)for(const [key,j] of jobs)if(!j.active){jobs.delete(key);break;}
   const quality=['best','1080','720','480','360'].includes(msg.quality)?msg.quality:'best';
   const job={url,tab,title:String(msg.title||'Видео').slice(0,200),quality,createdAt:Date.now(),active:true,port:null,state:{}};jobs.set(url,job);
@@ -59,11 +67,16 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
     if(!popup)return;
     chrome.runtime.sendNativeMessage(HOST,{action:msg.type==='yvd-helper-status'?'ping':'open-folder'}).then(reply).catch(error=>reply({status:'error',text:helperError(error)}));return true;
   }
-  if(['yvd-downloads','yvd-cancel-job','yvd-remove-job','yvd-retry-job'].includes(msg.type)){
+  if(['yvd-downloads','yvd-cancel-job','yvd-remove-job','yvd-retry-job','yvd-open-job','yvd-reveal-job'].includes(msg.type)){
     if(!popup)return;
     historyReady.then(async()=>{
       if(msg.type==='yvd-downloads'){reply([...jobs.values()].map(snapshot).reverse());return;}
       const job=jobs.get(msg.url);if(!job){reply({error:'Загрузка не найдена.'});return;}
+      if(['yvd-open-job','yvd-reveal-job'].includes(msg.type)){
+        if(job.state.status!=='done'||!job.state.filename){reply({error:'Файл ещё не сохранён.'});return;}
+        const result=await chrome.runtime.sendNativeMessage(HOST,{action:msg.type==='yvd-open-job'?'open-file':'reveal-file',filename:job.state.filename});
+        reply(result?.status==='done'?{ok:true}:{error:result?.text||'Не удалось открыть файл. Обновите помощник до 2.2.5.'});return;
+      }
       if(msg.type==='yvd-cancel-job'){if(job.active)job.port?.postMessage({action:'cancel'});reply({ok:true});return;}
       if(msg.type==='yvd-retry-job'){start({url:job.url,title:job.title,quality:job.quality},job.tab,reply);return;}
       if(job.active){reply({error:'Сначала остановите загрузку.'});return;}
@@ -83,7 +96,7 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
     if(!chrome.storage){respond();return;}historyReady.then(respond);return true;
   }
   if(msg.type==='yvd-cancel'){const job=jobs.get(msg.url);if(job?.tab===tab&&job.active){job.port?.postMessage({action:'cancel'});reply({ok:true});}return;}
-  if(msg.type==='yvd-start')start(msg,tab,reply);
+  if(msg.type==='yvd-start')return start(msg,tab,reply);
 });
 // Closing a source tab must not cancel a download managed in the popup.
 chrome.tabs.onRemoved.addListener(tab=>{for(const job of jobs.values())if(job.tab===tab)job.tab=null;});
