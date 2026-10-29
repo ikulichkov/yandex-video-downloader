@@ -469,3 +469,17 @@ test('one current-player control replaces duplicate card/panel and follows uniqu
  replaced=true;old.isConnected=false;clock=1000;next.currentTime=0;interval();clock=3000;next.currentTime=2;interval();await Promise.resolve();
  assert.equal(requests.filter(m=>m.type==='yvd-start').length,1);assert.equal(requests.at(-1).mediaUrl,next.currentSrc);
 });
+
+test('ordinary YouTube pages are excluded and cannot create controls or native jobs; other-site sources remain valid',()=>{
+ for(const url of ['https://youtube.com/watch?v=abcdefghijk','https://www.youtube.com/','https://m.youtube.com/shorts/abcdefghijk','https://youtu.be/abcdefghijk']){
+  assert.equal(YVD.isYouTubePage(url),true);
+  vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{YVD,location:{href:url}});
+ }
+ for(const url of ['https://youtube.com.evil.example/','https://example.com/watch/1','https://www.youtube-nocookie.com/embed/abcdefghijk'])assert.equal(YVD.isYouTubePage(url),false);
+ assert.equal(YVD.sourceURL('https://www.youtube.com/watch?v=abcdefghijk'),'https://www.youtube.com/watch?v=abcdefghijk');
+ const manifest=JSON.parse(fs.readFileSync(require.resolve('../manifest.json'),'utf8'));assert.ok(manifest.content_scripts[0].exclude_matches.includes('*://*.youtube.com/*'));
+ let response,starts=0;const chrome={runtime:{id:'off',onMessage:event(),connectNative(){starts++;throw Error('must not start')}},tabs:{onRemoved:event()}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../background.js'),'utf8'),{chrome,YVD,Map,importScripts(){}});
+ chrome.runtime.onMessage.listeners[0]({type:'yvd-start',url:'https://www.youtube.com/watch?v=abcdefghijk'},{id:'off',url:'https://www.youtube.com/watch?v=abcdefghijk',tab:{id:1}},r=>response=r);
+ assert.equal(starts,0);assert.ok(response.error.includes('отключено'));
+});

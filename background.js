@@ -4,7 +4,7 @@ let maxConcurrentDownloads=5,limitChanged=false;
 const validLimit=value=>Number.isInteger(value)&&value>=1&&value<=20;
 const HOST='ru.local.yandex_video_downloader';
 importScripts('cards.js','updates.js');
-const allowedPage=value=>Boolean(YVD.publicURL(value));
+const allowedPage=value=>Boolean(YVD.publicURL(value))&&!YVD.isYouTubePage?.(value);
 const terminal=s=>['done','error','cancelled','removed'].includes(s);
 const snapshot=j=>({url:j.url,title:j.title||'Видео',quality:j.quality||'best',createdAt:j.createdAt,...j.state});
 function persist(){historyReady.then(()=>chrome.storage?.local?.set({downloadHistory:[...jobs.values()].slice(-100).map(snapshot),downloadedVideos:[...downloaded.values()].slice(-1000)})).catch(()=>{});}
@@ -99,6 +99,7 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
       jobs.delete(job.url);persist();reply({ok:true});
     }).catch(()=>reply({error:'Не удалось выполнить действие.'}));return true;
   }
+  if(sender.tab&&YVD.isYouTubePage?.(sender.url)&&msg.type==='yvd-start'){reply({error:'На страницах YouTube скачивание отключено.'});return;}
   if(!sender.tab||!allowedPage(sender.url))return;
   const tab=sender.tab.id;
   if(msg.type==='yvd-status'){

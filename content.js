@@ -1,4 +1,5 @@
 (() => {
+  if(YVD.isYouTubePage?.(location.href))return;
   const states=new Map(),records=new Map();
   const defaults={placement:'top-left',showCurrentPanel:false,quality:'best'};
   const placements=new Set(['separate','top-left','top-right','bottom-left','bottom-right']);

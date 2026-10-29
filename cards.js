@@ -1,6 +1,7 @@
 /* Shared pure card extraction: never use video.src (Yandex thumbnail previews). */
 (function (root) {
   const hosts = new Set(['dzen.ru','rutube.ru','ok.ru','vk.com','vkvideo.ru','youtube.com','www.youtube.com','m.youtube.com','youtu.be']);
+  function isYouTubePage(value){try{const h=new URL(value).hostname.toLowerCase().replace(/\.$/,'');return h==='youtube.com'||h.endsWith('.youtube.com')||h==='youtu.be'||h.endsWith('.youtu.be');}catch{return false;}}
   function sourceURL(value) {
     try {
       const u = new URL(value);
@@ -107,6 +108,6 @@
     }
     return Array.from(found,([element,info])=>({element,info}));
   }
-  root.YVD = {sourceURL,extract,publicURL,videoURL,currentVideo,genericCards,isAd};
+  root.YVD = {isYouTubePage,sourceURL,extract,publicURL,videoURL,currentVideo,genericCards,isAd};
   if(typeof module !== 'undefined') module.exports=root.YVD;
 })(typeof globalThis!=='undefined'?globalThis:this);
