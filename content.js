@@ -9,7 +9,10 @@
   const rectOf=e=>e.getBoundingClientRect?.()||{left:0,top:0,right:160,bottom:90,width:160,height:90};
   const visible=r=>r.width>40&&r.height>25&&r.bottom>=0&&r.top<(typeof innerHeight==='number'?innerHeight:2000)+100;
   let pageURL=location.href;
-  function clearControls(){for(const item of records.values())item.ui.remove();records.clear();panel?.remove();panel=null;}
+  const adwait=typeof YVA!=='undefined'?YVA.create():null;
+  let videoActions=null,waitText='';
+  function clearAdControls(){adwait?.cancel();videoActions?.ui.remove();videoActions=null;waitText='';}
+  function clearControls(){clearAdControls();for(const item of records.values())item.ui.remove();records.clear();panel?.remove();panel=null;}
   function routeChanged(){if(pageURL===location.href)return false;pageURL=location.href;clearControls();return true;}
   function exposed(card,box){
     if(card.isConnected===false||card.getClientRects?.().length===0)return false;
@@ -34,7 +37,8 @@
       .status{background:#252525;color:#f5f5f5;border-radius:5px;padding:3px 6px;overflow-wrap:anywhere;max-width:235px}.status:empty{display:none}
       .separate button,.panel button{font-size:12px;padding:8px 11px}.separate{max-width:260px}
       .panel{right:20px;bottom:20px;left:auto;top:auto;max-width:320px;padding:13px;border:1px solid #777;border-radius:13px;background:#202124;box-shadow:0 4px 20px #0006;gap:9px}
-      .music button{border-radius:50%;background:#292929;color:#fff;border:1px solid #777;box-shadow:0 2px 6px #0005}.music button:hover{background:#444}.music.album button{border-radius:20px;font-size:12px;padding:10px 14px}.music button.downloaded{background:#62d991;color:#103a20}.title{font-weight:600}.panel .status{background:none;padding:0}
+      .video-actions{max-width:260px}.video-actions button{font-size:12px;padding:8px 10px}.video-actions .buttons{display:flex;gap:5px;pointer-events:none}.video-actions .status{max-width:250px}
+      .music button{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:#ffdf00;color:#080808;border:0;box-shadow:0 2px 6px #0005;font-weight:900;width:30px;height:30px;padding:5px}.music button:hover{background:#ffed69}.music button svg{width:20px;height:20px;stroke:currentColor;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;fill:none}.music.album button{width:auto;height:auto;gap:6px}.music.album button{border-radius:20px;font-size:12px;padding:10px 14px}.music button.downloaded{background:#62d991;color:#103a20}.title{font-weight:600}.panel .status{background:none;padding:0}
     `;root.append(style);(document.documentElement||document.body).append(host);return root;
   }
   function render(ui,info,isPanel=false){
@@ -47,11 +51,17 @@
     button.className=saved&&!active(state)?'downloaded':'';
     button.textContent=info.musicPosition?(active(state)?(info.media==='album'?'■ Остановить альбом':'■'):saved?'✓':info.media==='album'?'↓ Скачать альбом':'↓'):active(state)?'Отменить':saved?(isPanel||preferences.placement==='separate'?'✓ Скачано · Скачать ещё':'✓'):isPanel?'↓ Скачать текущее видео':preferences.placement==='separate'?'↓ Скачать':'↓';
     if(info.media==='album'&&active(state)&&Number.isFinite(state.percent))button.textContent+=' '+state.percent+'%';
+    if(info.musicPosition&&!active(state)&&!saved&&info.media!=='album'&&document.createElementNS){
+      const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');
+      const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d','M12 3v15m-6-6 6 6 6-6M5 21h14');svg.append(path);button.replaceChildren(svg);
+    }
     button.title='Скачать '+(info.media==='album'?'альбом: ':'')+info.title;button.setAttribute('aria-label',active(state)?'Отменить скачивание':'Скачать '+info.title);
     if(saved&&!active(state)){button.title='Уже скачано. Скачать ещё: '+info.title;button.setAttribute('aria-label',button.title);}
     button.addEventListener('click',async e=>{
       e.preventDefault();e.stopPropagation();
       if(routeChanged()){schedule();return;}
+      const item=[...records.values()].find(x=>x.ui===ui);
+      if(item&&!bound(item)){if(ui.style)ui.style.display='none';schedule();return;}
       try{const reply=await chrome.runtime.sendMessage({type:active(states.get(info.url))?'yvd-cancel':'yvd-start',url:info.url,title:info.title,quality:preferences.quality});if(reply?.error)states.set(info.url,{status:'error',text:reply.error});}
       catch{states.set(info.url,{status:'error',text:'Обновите страницу после обновления расширения.'});}
       paint();
@@ -61,27 +71,31 @@
     status.title=state?.filename||status.textContent;ui.append(button,status);
   }
   function paint(){
+    paintVideoActions();
     for(const item of records.values())render(item.ui,item.info);
     const current=currentInfo();
     if(!current||!preferences.showCurrentPanel){panel?.remove();panel=null;return;}
     if(!panel){panel=document.createElement('aside');panel.id='yvd-current';panel.className='control panel';panel.setAttribute('aria-label','Скачать текущее видео');ensureRoot().append(panel);}
     render(panel,current,true);
   }
-  function measure(card){
+  function bound(item){return !item.info.musicPosition||!music?.matches||music.matches(item.card,item.info,document,location.href);}
+  function measure(card,info){
     const outer=rectOf(card);
+    if(info?.musicPosition)return {outer,box:outer};
     const boxes=Array.from(card.querySelectorAll('img,video,picture,canvas,[role="img"],[style*="background-image"]')).map(e=>e.getBoundingClientRect?.()).filter(b=>b&&b.width>40&&b.height>25).sort((a,b)=>b.width*b.height-a.width*a.height);
     return {outer,box:boxes[0]||outer};
   }
   function positionAll(){
     // Read all geometry first, then touch only our isolated overlay.
-    const positions=Array.from(records.values(),item=>{const measured=measure(item.card);return {item,...measured,shown:visible(measured.outer)&&exposed(item.card,measured.box)};});
+    const positions=Array.from(records.values(),item=>{const measured=measure(item.card,item.info);return {item,...measured,shown:bound(item)&&visible(measured.outer)&&exposed(item.card,measured.box)};});
+    positionVideoActions();
     for(const {item,outer,box,shown} of positions){
       const ui=item.ui;if(!ui.style)continue;
       if(!shown){ui.style.display='none';continue;}ui.style.display='flex';
       if(item.info.musicPosition){
         const kind=item.info.musicPosition;
-        ui.style.left=(kind==='track'?Math.max(4,outer.left-28):kind==='album'?Math.min(outer.right-150,item.card.lastElementChild?.getBoundingClientRect?.().right+8||outer.right-150):outer.right-36)+'px';
-        ui.style.top=(kind==='track'?outer.top+(outer.height-28)/2:kind==='player'?Math.max(4,outer.top-32):outer.top+Math.max(0,(outer.height-34)/2))+'px';ui.style.transform='none';
+        ui.style.left=(kind==='track'?Math.max(4,outer.left-28):kind==='album'?Math.min(outer.right-150,item.card.lastElementChild?.getBoundingClientRect?.().right+8||outer.right-150):kind==='wave'?outer.right-76:Math.min(outer.right-40,outer.left+outer.width*.67))+'px';
+        ui.style.top=(kind==='track'?outer.top+(outer.height-28)/2:kind==='wave'?outer.top+Math.max(4,outer.height*.60-15):outer.top+Math.max(0,(outer.height-30)/2))+'px';ui.style.transform='none';
       }else if(preferences.placement==='separate'){
         ui.style.left=Math.max(4,outer.left)+'px';ui.style.top=Math.max(4,outer.bottom-29)+'px';ui.style.transform='none';
       }else{
@@ -105,7 +119,61 @@
       if(!item){const ui=document.createElement('div');ui.className='control card';ensureRoot().append(ui);item={card,info,ui};records.set(card,item);}
       item.info=info;
     }
-    positionAll();paint();
+    syncVideoActions();positionAll();paint();
+  }
+  function videoRoot(video){
+    const known=video.closest?.('.video-js,.html5-video-player,[data-player]');if(known)return known;
+    const parent=video.parentElement;if(parent){const box=rectOf(parent),r=rectOf(video);if(box.width>0&&box.width<=r.width+80&&box.height>0&&box.height<=r.height+150)return parent;}return video;
+  }
+  function syncVideoActions(){
+    if(!adwait||/^https?:\/\/music\.yandex\./.test(location.href)){clearAdControls();return;}
+    if(adwait.view().state==='waiting'&&videoActions)return;
+    const candidates=[...document.querySelectorAll('video')].filter(v=>{const r=rectOf(v);return r.width>=240&&r.height>=135&&visible(r)&&exposed(videoRoot(v),r)&&!v.closest?.('.VideoSnippet,[data-testid="video_card_layout"]');});
+    const current=YVD.currentVideo(document,location.href);
+    if(!candidates.length||!current&&candidates.length!==1){clearAdControls();return;}
+    candidates.sort((a,b)=>rectOf(b).width*rectOf(b).height-rectOf(a).width*rectOf(a).height);
+    const video=candidates[0],info=current||{url:YVD.publicURL(location.href),title:document.title};
+    if(!info.url)return;
+    if(videoActions?.video===video&&videoActions.info.url===info.url)return;
+    clearAdControls();const ui=document.createElement('aside');ui.className='control video-actions';ui.setAttribute('aria-label','Скачивание видео');ensureRoot().append(ui);
+    videoActions={video,info,ui};paintVideoActions();
+  }
+  function positionVideoActions(){
+    if(!videoActions?.ui.style)return;
+    const r=rectOf(videoActions.video),shown=visible(r)&&exposed(videoRoot(videoActions.video),r);
+    videoActions.ui.style.display=shown?'flex':'none';
+    videoActions.ui.style.left=Math.max(4,r.right-260)+'px';videoActions.ui.style.top=Math.max(4,r.top+8)+'px';
+  }
+  async function startVideoRequest(request){
+    const owner=videoActions;
+    try{const reply=await chrome.runtime.sendMessage({type:'yvd-start',url:request.url,title:request.title,quality:request.quality});if(videoActions===owner)waitText=reply?.error||'';}
+    catch{if(videoActions===owner)waitText='Обновите страницу после обновления расширения.';}
+    paintVideoActions();
+  }
+  function tickAdWait(){
+    if(!adwait||!videoActions||adwait.view().state!=='waiting')return;
+    const video=videoActions.video,current=YVD.currentVideo(document,location.href);
+    const request=adwait.observe({page:location.href,source:current?.url,connected:video.isConnected!==false,ad:YVA.isAd(video),playing:video.paused===false&&!video.ended&&video.readyState>=2,time:video.currentTime,now:Date.now()});
+    if(request)startVideoRequest(request);
+    paintVideoActions();
+  }
+  function paintVideoActions(){
+    if(!videoActions||!adwait)return;
+    const {ui,info}=videoActions,view=adwait.view(),waiting=view.state==='waiting',state=states.get(info.url),busy=active(state);
+    const text=waitText||(waiting?(view.sawAd?'Жду возврата основного видео после рекламы…':'Жду окончания рекламы. Если сайт не сообщает о ней, после рекламы нажмите «Скачать сейчас».'):view.state==='expired'?'Ожидание истекло (5 минут). Можно скачать сейчас.':view.state==='changed'?'Ожидание отменено: плеер или ролик сменился.':state?.text||'');
+    const signature=JSON.stringify([view,state,text]);if(ui.dataset.signature===signature)return;ui.dataset.signature=signature;ui.replaceChildren();
+    const buttons=document.createElement('div');buttons.className='buttons';
+    const now=document.createElement('button');now.type='button';now.textContent=busy?'Отменить загрузку':waiting?'Скачать сейчас':'↓ Скачать видео';
+    now.addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();if(routeChanged())return;
+      if(busy){await chrome.runtime.sendMessage({type:'yvd-cancel',url:info.url});return;}
+      const current=YVD.currentVideo(document,location.href);if(current&&current.url!==info.url){clearAdControls();schedule();return;}
+      const request=waiting?adwait.start():{...info,quality:preferences.quality};if(request)await startVideoRequest(request);
+    });
+    const later=document.createElement('button');later.type='button';later.textContent=waiting?'Отменить ожидание':'После рекламы';later.disabled=busy;
+    later.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();if(routeChanged())return;
+      waitText='';if(adwait.view().state==='waiting'){adwait.cancel();}else{adwait.arm({...info,page:location.href,quality:preferences.quality},Date.now());tickAdWait();}paintVideoActions();
+    });
+    const status=document.createElement('span');status.className='status';status.setAttribute('aria-live','polite');status.textContent=text;buttons.append(now,later);ui.append(buttons,status);
   }
   function schedule(){routeChanged();for(const [card,item] of records)if(card.isConnected===false){item.ui.remove();records.delete(card);}if(timer===null)timer=setTimeout(()=>{timer=null;refresh();},400);}
   new MutationObserver(schedule).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['href','src','poster','data-ad','data-is-ad','aria-label']});
@@ -123,11 +191,17 @@
   function apply(values){preferences={placement:placements.has(values.placement)?values.placement:defaults.placement,showCurrentPanel:values.showCurrentPanel===true,quality:['best','1080','720','480','360'].includes(values.quality)?values.quality:'best'};positionAll();paint();}
   chrome.storage?.local?.get(defaults).then(apply).catch(()=>{});
   chrome.storage?.onChanged?.addListener((changes,area)=>{if(area!=='local')return;if(changes.placement||changes.showCurrentPanel||changes.quality)chrome.storage.local.get(defaults).then(apply);if(changes.downloadedVideos)syncStates();});
-  window.addEventListener('scroll',()=>{if(scrollFrame===null){scrollFrame=requestAnimationFrame(()=>{scrollFrame=null;positionAll();});}schedule();},{passive:true});
+  function onScroll(){
+    if(scrollFrame===null)scrollFrame=requestAnimationFrame(()=>{scrollFrame=null;positionAll();});
+    schedule();
+  }
+  // Element scroll events do not bubble: capture nested/virtual list scrolling.
+  document.addEventListener?.('scroll',onScroll,{capture:true,passive:true});
+  window.addEventListener('scroll',onScroll,{passive:true});
   window.addEventListener('resize',()=>{positionAll();schedule();});window.addEventListener('popstate',schedule);
   document.addEventListener?.('loadedmetadata',schedule,true);document.addEventListener?.('load',e=>{if(e.target?.tagName==='IMG')schedule();},true);
   window.addEventListener('pagehide',clearControls);
   window.addEventListener('pageshow',schedule);
-  setInterval(()=>{if(routeChanged())schedule();else positionAll();},250);
+  setInterval(()=>{if(routeChanged())schedule();else {tickAdWait();positionAll();}},250);
   refresh();
 })();

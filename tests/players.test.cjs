@@ -48,7 +48,7 @@ class El{
  constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.listeners={};this.attrs={};this.parent=null;this.style={};}
  attachShadow(){this.shadowRoot=new El('shadow');return this.shadowRoot;}
  append(...items){for(const x of items){x.parent=this;this.children.push(x)}}
- replaceChildren(){this.children=[]}
+ replaceChildren(...items){this.children=[];this.append(...items)}
  setAttribute(k,v){this.attrs[k]=v}
  addEventListener(k,fn){this.listeners[k]=fn}
  remove(){if(this.parent)this.parent.children=this.parent.children.filter(x=>x!==this)}
@@ -364,4 +364,68 @@ test('album completions persist individual tracks with file actions; cancellatio
  await send({type:'yvd-cancel',url:album});assert.equal(ports[0].sent.at(-1).action,'cancel');ports[0].onMessage.listeners[0]({status:'cancelled'});
  list=await send({type:'yvd-downloads'},true);assert.equal(list.find(j=>j.url===track).status,'done');assert.equal(list.find(j=>j.url===album).status,'cancelled');
  assert.equal((await send({type:'yvd-status'})).find(j=>j.url===track).downloaded,true);
+});
+
+test('wave player resolves a unique visible track in its own meta region, never an ambiguous list',()=>{
+ const M=require('../music.js'),link=id=>({getAttribute:k=>k==='href'?'/album/1/track/'+id:null,textContent:'Track '+id,getClientRects:()=>[{}]});
+ let links=[link(2)];const region={querySelectorAll:()=>links};const wave={className:'VibePlayerBar_root__hash',querySelectorAll:()=>[],closest:()=>region};
+ const doc={querySelectorAll:s=>s.includes('CommonTrack')||s.includes('PageHeader')?[]:[wave]};
+ assert.equal(M.current(doc,'https://music.yandex.ru/').url,'https://music.yandex.ru/album/1/track/2');
+ assert.equal(M.controls(doc,'https://music.yandex.ru/')[0].info.musicPosition,'wave');
+ links=[link(2),link(3)];assert.equal(M.current(doc,'https://music.yandex.ru/'),null);
+ links=[link(3)];assert.equal(M.matches(wave,{url:'https://music.yandex.ru/album/1/track/2',musicPosition:'wave'},doc,'https://music.yandex.ru/'),false);
+ links[0].getClientRects=()=>[];assert.equal(M.current(doc,'https://music.yandex.ru/'),null);
+});
+
+test('nested scroll updates geometry in one frame, hides reused rows and rejects stale clicks',async()=>{
+ const body=new El('body'),row=new El('div'),events={},requests=[],frames=[];let top=200,binding='https://music.yandex.ru/album/1/track/2';
+ row.querySelectorAll=()=>[];row.getBoundingClientRect=()=>({left:110,right:810,top,bottom:top+56,width:700,height:56});
+ const info={url:binding,title:'Track',media:'audio',musicPosition:'track'};
+ const doc={body,title:'Music',createElement:t=>new El(t),createElementNS:(ns,t)=>new El(t),querySelectorAll:()=>[],querySelector:()=>null,addEventListener:(type,fn,opts)=>events[type]={fn,opts}};
+ const chrome={runtime:{onMessage:{addListener(){}},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?[]:{ok:true}}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,chrome,location:{href:'https://music.yandex.ru/album/1'},window:{addEventListener(){}},MutationObserver:class{observe(){}},setTimeout(){return 1},setInterval(){},requestAnimationFrame:f=>{frames.push(f);return frames.length},YVD:{genericCards:()=>[],currentVideo:()=>null},YVM:{controls:()=>[{element:row,info}],current:()=>null,matches:()=>binding===info.url}});
+ const ui=cardControls(body)[0],button=ui.children[0];assert.equal(ui.style.top,'214px');assert.equal(events.scroll.opts.capture,true);assert.equal(events.scroll.opts.passive,true);
+ assert.equal(button.children[0].tag,'svg');assert.equal(button.children[0].children[0].attrs.d,'M12 3v15m-6-6 6 6 6-6M5 21h14');
+ top=120;events.scroll.fn();events.scroll.fn();assert.equal(frames.length,1);frames.shift()();assert.equal(ui.style.top,'134px');
+ binding='https://music.yandex.ru/album/1/track/3';events.scroll.fn();frames.shift()();assert.equal(ui.style.display,'none');
+ await button.listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.filter(m=>m.type==='yvd-start').length,0);
+ const css=body.children[0].shadowRoot.children[0].textContent;assert.ok(css.includes('background:#ffdf00'));assert.ok(css.includes('stroke-width:3.5'));
+});
+
+test('player download sits within both player rectangles instead of dangling above them',()=>{
+ for(const kind of ['player','wave']){
+  const body=new El('body'),player=new El('section');player.querySelectorAll=()=>[];player.getBoundingClientRect=()=>({left:100,right:800,top:600,bottom:700,width:700,height:100});
+  const doc={body,createElement:t=>new El(t),querySelectorAll:()=>[],querySelector:()=>null};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,chrome:{runtime:{onMessage:{addListener(){}},sendMessage:async()=>[]}},location:{href:'https://music.yandex.ru/'},window:{addEventListener(){}},MutationObserver:class{observe(){}},setTimeout(){},setInterval(){},YVD:{genericCards:()=>[],currentVideo:()=>null},YVM:{controls:()=>[{element:player,info:{url:'https://music.yandex.ru/album/1/track/2',title:'Track',musicPosition:kind}}],current:()=>null}});
+  const ui=cardControls(body)[0],x=parseFloat(ui.style.left),y=parseFloat(ui.style.top);assert.ok(x>=100&&x+30<=800);assert.ok(y>=600&&y+30<=700);
+ }
+});
+
+test('deferred download requires explicit ad then sustained content playback; never guesses from ended or src',()=>{
+ const A=require('../adwait.js'),w=A.create(),ctx={page:'https://example.com/watch/1',url:'https://example.com/watch/1',quality:'720'};
+ const sample={page:ctx.page,source:ctx.url,connected:true,ad:false,playing:true,time:10,now:100};
+ w.arm(ctx,0);assert.equal(w.observe(sample),null);assert.equal(w.observe({...sample,time:50,now:10000}),null);assert.equal(w.view().sawAd,false);
+ w.observe({...sample,ad:true,now:11000});assert.equal(w.view().sawAd,true);
+ assert.equal(w.observe({...sample,now:12000,time:0}),null);assert.equal(w.observe({...sample,now:13000,time:1}),null);
+ const request=w.observe({...sample,now:14000,time:2});assert.equal(request.url,ctx.url);assert.equal(request.quality,'720');assert.equal(w.observe({...sample,now:15000,time:3}),null);
+ w.arm(ctx,0);w.observe({...sample,ad:true});w.observe({...sample,now:1000});w.observe({...sample,now:2000,ad:true});assert.equal(w.observe({...sample,now:3000,time:12}),null);
+ w.cancel();assert.equal(w.observe({...sample,now:5000,time:14}),null);assert.equal(w.start(),null);
+ for(const change of [{page:'https://example.com/watch/2'},{source:'https://example.com/watch/2'},{connected:false}]){w.arm(ctx,0);assert.equal(w.observe({...sample,...change}),null);assert.equal(w.view().state,'changed');}
+ w.arm(ctx,0);assert.equal(w.observe({...sample,now:300000}),null);assert.equal(w.view().state,'expired');
+ w.arm(ctx,0);assert.equal(w.start().url,ctx.url);assert.equal(w.start(),null);
+});
+
+test('on-player after-ad button defers native start, preserves webpage source and permits cancellation',async()=>{
+ const A=require('../adwait.js'),body=new El('body'),video=new El('video'),requests=[];let interval,clock=0,ad=true;
+ video.getBoundingClientRect=()=>({left:20,top:100,right:660,bottom:460,width:640,height:360});video.closest=s=>s.includes('.vjs-ad-playing')&&ad?{}:null;video.paused=false;video.readyState=4;video.currentTime=1;
+ const page='https://example.com/watch/1',doc={body,title:'Content',createElement:t=>new El(t),querySelectorAll:s=>s==='video'?[video]:[],querySelector:()=>null,addEventListener(){}};
+ const chrome={runtime:{onMessage:{addListener(){}},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?[]:{ok:true}}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,chrome,Date:{now:()=>clock},location:{href:page},window:{addEventListener(){}},MutationObserver:class{observe(){}},setTimeout(){},setInterval:f=>interval=f,YVD:{publicURL:x=>x,genericCards:()=>[],currentVideo:()=>({url:page,title:'Content'})},YVA:A});
+ const ui=body.children[0].shadowRoot.children.find(e=>e.className==='control video-actions');assert.ok(ui);
+ const click=button=>button.listeners.click({preventDefault(){},stopPropagation(){}});
+ await click(ui.children[0].children[1]);assert.equal(requests.filter(m=>m.type==='yvd-start').length,0);assert.equal(ui.children[0].children[1].textContent,'Отменить ожидание');
+ ad=false;clock=1000;video.currentTime=0;interval();clock=2000;video.currentTime=1;interval();assert.equal(requests.filter(m=>m.type==='yvd-start').length,0);
+ clock=3000;video.currentTime=2;interval();await Promise.resolve();assert.equal(requests.filter(m=>m.type==='yvd-start').length,1);assert.equal(requests.at(-1).url,page);
+ // Re-arming and cancelling never schedules another download.
+ ad=true;await click(ui.children[0].children[1]);await click(ui.children[0].children[1]);ad=false;clock=8000;video.currentTime=10;interval();assert.equal(requests.filter(m=>m.type==='yvd-start').length,1);
 });

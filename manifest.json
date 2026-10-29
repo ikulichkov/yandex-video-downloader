@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Видео — Скачать",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "Кнопки скачивания у видеокарточек, текущий ролик в окне расширения и настройка размещения.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr8bLGxPnygT17pgrEFzR120st7nOjUn7PwTJfRQGt3TNBViYeguKoPt5NCe7aqKzVIaibCWBw8lM7DPmA+7j9rvqrnvvqOfvm6EBCSb3jPh8C+uQ7xgJXOBWDm4Mai1xXO1r7IjkqBDOdM/EAW5kRwcyj9AxaJ7FHVl0JKRyg/rQkIMteOAWVNBeo0Pe9K0b5jjAAbaizw8Vy5973aCD06G/UmRyIjh+PfR6cyORSO0ldpCFyiuCkwNqVdqphFFw8W533ZpbFs3lvhWmz0HtI5ZpthLASG5vKxvLuY2C0t/7zQYmR+tc9TJWBsHjmZA3V3nn063FSw1lR02MXipVaQIDAQAB",
   "permissions": [
@@ -21,6 +21,7 @@
       "js": [
         "cards.js",
         "music.js",
+        "adwait.js",
         "content.js"
       ],
       "css": [
