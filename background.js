@@ -52,6 +52,15 @@ function startReady(msg,tab,reply){
     const port=chrome.runtime.connectNative(HOST);job.port=port;
     port.onMessage.addListener(m=>{
       if(!['progress','processing','done','error','cancelled'].includes(m.status))return;
+      if(m.status==='progress'&&/^https:\/\/music\.yandex\.ru\/album\/\d+\/track\/\d+$/.test(m.completedUrl||'')&&/^https?:\/\/music\.yandex\./.test(job.url)){
+        downloaded.set(m.completedUrl,{url:m.completedUrl,status:'done',downloaded:true,filename:m.completedFilename});
+        if(m.completedUrl!==job.url&&!jobs.get(m.completedUrl)?.active){
+          if(jobs.size>=100)for(const [key,j] of jobs)if(!j.active){jobs.delete(key);break;}
+          const child={url:m.completedUrl,title:String(m.completedTitle||'Трек').slice(0,200),quality:'best',createdAt:Date.now(),tab:job.tab,active:false,state:{}};jobs.set(child.url,child);
+          notify(child,{status:'done',text:'Трек сохранён',filename:m.completedFilename});
+        }
+        while(downloaded.size>1000)downloaded.delete(downloaded.keys().next().value);persist();
+      }
       if(terminal(m.status))job.active=false;
       notify(job,{status:m.status,text:String(m.text||'').slice(0,300),percent:m.percent,filename:m.filename});
       if(!job.active)port.disconnect();

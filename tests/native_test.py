@@ -2,6 +2,7 @@ import importlib.util, io, json, struct, subprocess, sys, tempfile
 from pathlib import Path
 from unittest.mock import patch
 root=Path(__file__).resolve().parent.parent
+sys.path.insert(0,str(root/'native'))
 spec=importlib.util.spec_from_file_location('yvd_host',root/'native/host.py');host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
 origin='chrome-extension://'+host.EXT_ID+'/'
 def frame(msg):
@@ -155,3 +156,44 @@ with patch.object(ctypes,'windll',SimpleNamespace(shell32=shell,ole32=ole),creat
  assert shell.SHOpenFolderAndSelectItems.call_args.args[1:]==(0,None,0)
  assert ole.CoTaskMemFree.call_args.args[0].value==123
  ole.CoUninitialize.assert_called_once()
+
+# Yandex Music: complete album metadata, exact identity, no previews, saved audio.
+import music
+assert music.identity('https://music.yandex.ru/album/1750287/track/15608804')==('1750287','15608804')
+assert music.identity('https://music.yandex.ru.evil/album/1') is None
+assert [x['id'] for x in music.album_tracks({'id':1,'volumes':[[{'id':2}],[{'id':3},{'id':2}]]},'1')]==[2,3]
+for data in [{'id':2,'volumes':[[{'id':1}]]},{'id':1,'volumes':[]},{'id':1,'volumes':[[{'id':i} for i in range(501)]]}]:
+ try:music.album_tracks(data,'1')
+ except music.MusicUnavailable:pass
+ else:raise AssertionError('bad album accepted')
+for formats in [[{'codec':'mp3','preview':True,'downloadInfoUrl':'https://example.com/a'}],[{'codec':'mp3','downloadInfoUrl':'https://example.com/a'}]]:
+ try:music.full_format(formats)
+ except music.MusicUnavailable:pass
+ else:raise AssertionError('preview or unknown permission accepted')
+formats=[{'codec':'mp3','preview':False,'downloadInfoUrl':'https://example.com/a','bitrateInKbps':v} for v in [128,320]]
+assert music.full_format(formats)['bitrateInKbps']==320
+xml=b'<download-info><host>example.com</host><path>/audio.mp3</path><ts>123</ts><s>public</s></download-info>'
+assert music.direct_url(xml,host.valid_url).startswith('https://example.com/get-mp3/')
+try:music.direct_url(xml.replace(b'example.com',b'127.0.0.1'),host.valid_url)
+except music.MusicUnavailable:pass
+else:raise AssertionError('private media allowed')
+with tempfile.TemporaryDirectory() as tmp:
+ target=Path(tmp);events=[]
+ class AudioYDL:
+  def process_ie_result(self,info,download):
+   assert info['vcodec']=='none' and info['ext']=='mp3' and download
+   path=target/(info['id']+'.mp3');path.write_bytes(b'audio');return {**info,'filepath':str(path)}
+ def fake_api(path,guard):
+  if path.startswith('albums/'):return {'id':1,'volumes':[[{'id':2,'title':'Two'},{'id':3,'title':'Three'}]]}
+  if path.endswith('download-info'):return formats
+  return [{'id':2,'title':'Two'}]
+ with patch.object(music,'api',side_effect=fake_api),patch.object(music,'read',return_value=xml):
+  music.download(AudioYDL(),'https://music.yandex.ru/album/1',target,lambda **x:events.append(x),host.valid_url)
+ assert [x['completedUrl'] for x in events if 'completedUrl' in x]==['https://music.yandex.ru/album/1/track/2','https://music.yandex.ru/album/1/track/3']
+ assert events[-1]['status']=='done' and 'filename' not in events[-1]
+ # Failure partway through never reports the whole album done.
+ events=[]
+ with patch.object(music,'api',side_effect=fake_api),patch.object(music,'read',side_effect=[xml,music.MusicUnavailable('only preview')]):
+  try:music.download(AudioYDL(),'https://music.yandex.ru/album/1',target,lambda **x:events.append(x),host.valid_url)
+  except music.MusicUnavailable:pass
+ assert not any(x['status']=='done' for x in events) and sum('completedUrl' in x for x in events)==1

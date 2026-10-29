@@ -18,7 +18,7 @@ if sys.platform != 'darwin':
     raise SystemExit('Этот установщик предназначен для macOS.')
 if not python.is_file() or not os.access(python, os.X_OK):
     raise SystemExit('Сначала выполните install.command')
-for target in [runtime, runtime/'native', runtime/'native'/'host.py', runtime/'extension-id.txt', launcher, path]:
+for target in [runtime, runtime/'native', runtime/'native'/'host.py', runtime/'native'/'music.py', runtime/'extension-id.txt', launcher, path]:
     if target.is_symlink():
         raise SystemExit('Обнаружена символьная ссылка в месте установки; запись остановлена.')
 if path.exists() and json.loads(path.read_text()) != manifest:
@@ -37,6 +37,7 @@ def write_atomic(target, text, mode):
     temporary.chmod(mode)
     temporary.replace(target)
 write_atomic(runtime/'native'/'host.py', (source/'native'/'host.py').read_text(), 0o600)
+write_atomic(runtime/'native'/'music.py', (source/'native'/'music.py').read_text(), 0o600)
 write_atomic(runtime/'extension-id.txt', (source/'extension-id.txt').read_text(), 0o600)
 write_atomic(launcher, '#!/bin/zsh\nexec ' + shlex.quote(str(python)) + ' ' + shlex.quote(str(runtime/'native'/'host.py')) + ' "$@"\n', 0o700)
 write_atomic(path, json.dumps(manifest, indent=2), 0o600)

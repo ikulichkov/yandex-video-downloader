@@ -3,6 +3,8 @@
   const defaults={placement:'top-left',showCurrentPanel:false,quality:'best'};
   const placements=new Set(['separate','top-left','top-right','bottom-left','bottom-right']);
   let preferences={...defaults},host,root,panel,timer=null,scrollFrame=null;
+  const music=typeof YVM!=='undefined'?YVM:null;
+  const currentInfo=()=>music?.current(document,location.href)||YVD.currentVideo(document,location.href);
   const active=s=>['starting','progress','processing'].includes(s?.status);
   const rectOf=e=>e.getBoundingClientRect?.()||{left:0,top:0,right:160,bottom:90,width:160,height:90};
   const visible=r=>r.width>40&&r.height>25&&r.bottom>=0&&r.top<(typeof innerHeight==='number'?innerHeight:2000)+100;
@@ -32,7 +34,7 @@
       .status{background:#252525;color:#f5f5f5;border-radius:5px;padding:3px 6px;overflow-wrap:anywhere;max-width:235px}.status:empty{display:none}
       .separate button,.panel button{font-size:12px;padding:8px 11px}.separate{max-width:260px}
       .panel{right:20px;bottom:20px;left:auto;top:auto;max-width:320px;padding:13px;border:1px solid #777;border-radius:13px;background:#202124;box-shadow:0 4px 20px #0006;gap:9px}
-      .title{font-weight:600}.panel .status{background:none;padding:0}
+      .music button{border-radius:50%;background:#292929;color:#fff;border:1px solid #777;box-shadow:0 2px 6px #0005}.music button:hover{background:#444}.music.album button{border-radius:20px;font-size:12px;padding:10px 14px}.music button.downloaded{background:#62d991;color:#103a20}.title{font-weight:600}.panel .status{background:none;padding:0}
     `;root.append(style);(document.documentElement||document.body).append(host);return root;
   }
   function render(ui,info,isPanel=false){
@@ -43,8 +45,9 @@
     const button=document.createElement('button');button.type='button';
     const saved=state?.status==='done'||state?.downloaded===true;
     button.className=saved&&!active(state)?'downloaded':'';
-    button.textContent=active(state)?'Отменить':saved?(isPanel||preferences.placement==='separate'?'✓ Скачано · Скачать ещё':'✓'):isPanel?'↓ Скачать текущее видео':preferences.placement==='separate'?'↓ Скачать':'↓';
-    button.title='Скачать '+info.title;button.setAttribute('aria-label',active(state)?'Отменить скачивание':'Скачать '+info.title);
+    button.textContent=info.musicPosition?(active(state)?(info.media==='album'?'■ Остановить альбом':'■'):saved?'✓':info.media==='album'?'↓ Скачать альбом':'↓'):active(state)?'Отменить':saved?(isPanel||preferences.placement==='separate'?'✓ Скачано · Скачать ещё':'✓'):isPanel?'↓ Скачать текущее видео':preferences.placement==='separate'?'↓ Скачать':'↓';
+    if(info.media==='album'&&active(state)&&Number.isFinite(state.percent))button.textContent+=' '+state.percent+'%';
+    button.title='Скачать '+(info.media==='album'?'альбом: ':'')+info.title;button.setAttribute('aria-label',active(state)?'Отменить скачивание':'Скачать '+info.title);
     if(saved&&!active(state)){button.title='Уже скачано. Скачать ещё: '+info.title;button.setAttribute('aria-label',button.title);}
     button.addEventListener('click',async e=>{
       e.preventDefault();e.stopPropagation();
@@ -59,7 +62,7 @@
   }
   function paint(){
     for(const item of records.values())render(item.ui,item.info);
-    const current=YVD.currentVideo(document,location.href);
+    const current=currentInfo();
     if(!current||!preferences.showCurrentPanel){panel?.remove();panel=null;return;}
     if(!panel){panel=document.createElement('aside');panel.id='yvd-current';panel.className='control panel';panel.setAttribute('aria-label','Скачать текущее видео');ensureRoot().append(panel);}
     render(panel,current,true);
@@ -75,19 +78,24 @@
     for(const {item,outer,box,shown} of positions){
       const ui=item.ui;if(!ui.style)continue;
       if(!shown){ui.style.display='none';continue;}ui.style.display='flex';
-      if(preferences.placement==='separate'){
+      if(item.info.musicPosition){
+        const kind=item.info.musicPosition;
+        ui.style.left=(kind==='track'?Math.max(4,outer.left-28):kind==='album'?Math.min(outer.right-150,item.card.lastElementChild?.getBoundingClientRect?.().right+8||outer.right-150):outer.right-36)+'px';
+        ui.style.top=(kind==='track'?outer.top+(outer.height-28)/2:kind==='player'?Math.max(4,outer.top-32):outer.top+Math.max(0,(outer.height-34)/2))+'px';ui.style.transform='none';
+      }else if(preferences.placement==='separate'){
         ui.style.left=Math.max(4,outer.left)+'px';ui.style.top=Math.max(4,outer.bottom-29)+'px';ui.style.transform='none';
       }else{
         const left=preferences.placement.endsWith('left'),top=preferences.placement.startsWith('top');
         ui.style.left=(left?box.left+6:box.right-6)+'px';ui.style.top=(top?box.top+6:box.bottom-6)+'px';
         ui.style.transform=`translate(${left?'0':'-100%'},${top?'0':'-100%'})`;
       }
-      ui.className='control card'+(preferences.placement==='separate'?' separate':'');
+      ui.className='control card'+(item.info.musicPosition?' music '+item.info.musicPosition:'')+(preferences.placement==='separate'?' separate':'');
     }
   }
   function refresh(){
     routeChanged();
     const wanted=new Map();
+    for(const item of music?.controls(document,location.href)||[])if(visible(rectOf(item.element)))wanted.set(item.element,item.info);
     for(const card of document.querySelectorAll('.VideoSnippet, [data-testid="video_card_layout"]'))if(visible(rectOf(card)))wanted.set(card,YVD.extract(card));
     for(const item of YVD.genericCards(document))if(visible(rectOf(item.element))&&!wanted.has(item.element))wanted.set(item.element,item.info);
     for(const [card,item] of records)if(!wanted.get(card)?.url){item.ui.remove();records.delete(card);}
@@ -105,7 +113,7 @@
     if(msg.type==='yvd-state'){states.set(msg.url,msg);paint();return;}
     if(!['yvd-page-info','yvd-download-current'].includes(msg.type))return;
     if(sender?.id!==chrome.runtime.id||sender?.url!==chrome.runtime.getURL('popup.html'))return;
-    const current=YVD.currentVideo(document,location.href),url=current?.url||YVD.publicURL(location.href);
+    const current=currentInfo(),url=current?.url||YVD.publicURL(location.href);
     if(msg.type==='yvd-page-info'){reply({supported:true,current,state:states.get(url)||null,cards:records.size,page:{url:YVD.publicURL(location.href),title:document.title.slice(0,200)}});return;}
     if(!url){reply({error:'Откройте публичную страницу с видео.'});return;}
     chrome.runtime.sendMessage({type:active(states.get(url))?'yvd-cancel':'yvd-start',url,title:current?.title||document.title,quality:preferences.quality}).then(reply).catch(()=>reply({error:'Обновите страницу видео.'}));return true;

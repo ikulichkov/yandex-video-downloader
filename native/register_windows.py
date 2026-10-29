@@ -19,13 +19,14 @@ def install():
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER,key) as handle: old=winreg.QueryValueEx(handle,'')[0]
             if Path(old)!=manifest_path: raise SystemExit('Another host registration exists; refusing overwrite.')
         except FileNotFoundError: pass
-    for path in [runtime,runtime/'native',launcher,manifest_path,runtime/'native'/'host.py',runtime/'extension-id.txt']:
+    for path in [runtime,runtime/'native',launcher,manifest_path,runtime/'native'/'host.py',runtime/'native'/'music.py',runtime/'extension-id.txt']:
         if path.is_symlink(): raise SystemExit('Symlink install target rejected.')
     def write(path,content):
         temporary=path.with_name(path.name+'.install-tmp')
         with temporary.open('x',encoding='utf-8',newline='') as stream: stream.write(content)
         temporary.replace(path)
     write(runtime/'native'/'host.py',(source/'native'/'host.py').read_text(encoding='utf-8'))
+    write(runtime/'native'/'music.py',(source/'native'/'music.py').read_text(encoding='utf-8'))
     write(runtime/'extension-id.txt',(source/'extension-id.txt').read_text())
     write(launcher,'@echo off\r\nchcp 65001 >nul\r\n"'+str(python)+'" "'+str(runtime/'native'/'host.py')+'" %*\r\n')
     write(manifest_path,json.dumps(manifest,ensure_ascii=False,indent=2))

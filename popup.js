@@ -6,8 +6,8 @@
     const current=page?.current,state=page?.state,canTry=Boolean(current||page?.page?.url);
     el('video-title').textContent=current?.title || (page?.supported?'Выберите ролик на странице':'Откройте страницу с видео');
     el('download').disabled=!canTry||!helperReady;
-    el('download').textContent=busy(state)?'Отменить скачивание':current?'↓ Скачать видео':'Найти видео на странице';
-    el('status').textContent=state?.status==='done'?'✓ Видео сохранено':state?.text||'';
+    el('download').textContent=busy(state)?'Отменить скачивание':current?(current.media==='audio'?'↓ Скачать трек':'↓ Скачать видео'):'Найти видео на странице';
+    el('status').textContent=state?.status==='done'?(current?.media==='audio'?'✓ Трек сохранён':'✓ Видео сохранено'):state?.text||'';
     el('page-hint').textContent=current?'Кнопки у других роликов находятся на самой странице.':page?.cards?`Кнопок скачивания на странице: ${page.cards}. Нажмите кнопку у нужного ролика.`:'Откройте ролик по ссылке ниже. После обновления расширения перезагрузите вкладку.';
   }
   async function readPage(){
@@ -20,7 +20,7 @@
     try{const result=await chrome.runtime.sendMessage({type:'yvd-helper-status'});helperReady=result?.status==='ready';if(el('helper-hint')){
       let outdated=false;
       if(helperReady&&/^\d+\.\d+\.\d+$/.test(result.version||'')){
-        const actual=result.version.split('.').map(Number),required=[2,2,5];
+        const actual=result.version.split('.').map(Number),required=[2,3,0];
         for(let i=0;i<3;i++)if(actual[i]!==required[i]){outdated=actual[i]<required[i];break;}
       }
       el('helper-hint').textContent=outdated?'Помощник '+result.version+': для новых функций обновите его — Windows: install-windows.cmd; macOS: install.command из нового архива.':helperReady?'':result?.text||'Установите локальный помощник: Windows — install-windows.cmd, macOS — install.command из архива расширения.';

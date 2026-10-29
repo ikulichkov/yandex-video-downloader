@@ -108,7 +108,7 @@ def downloaded_file(value,media_only=False):
         if file.name!=value: raise ValueError('relative path')
         file=target/file
     if file.is_symlink() or not file.is_file() or file.parent.resolve()!=target: raise ValueError('file outside downloads or missing')
-    if media_only and file.suffix.lower() not in {'.mp4','.mkv','.webm','.mov','.m4v','.avi','.ts','.m2ts','.mpg','.mpeg','.ogv','.flv','.3gp'}: raise ValueError('not a media file')
+    if media_only and file.suffix.lower() not in {'.mp4','.mkv','.webm','.mov','.m4v','.avi','.ts','.m2ts','.mpg','.mpeg','.ogv','.flv','.3gp','.mp3','.m4a','.aac','.flac','.ogg','.opus','.wav'}: raise ValueError('not a media file')
     return file
 
 def windows_reveal(file):
@@ -136,6 +136,7 @@ def open_download(file,reveal=False):
         if result.returncode: raise OSError('open failed')
 
 def worker(url, quality='best'):
+    from music import identity as music_identity, download as music_download, MusicUnavailable
     # Separate process permits real cancellation, including extractor/ffmpeg children.
     def emit(**msg): print(json.dumps(msg,ensure_ascii=False),flush=True)
     try:
@@ -143,15 +144,20 @@ def worker(url, quality='best'):
         install_public_network_guard()
         import yt_dlp
         from shutil import which
+        music_source=music_identity(url)
         target=Path.home()/'Downloads'/'Яндекс Видео';target.mkdir(parents=True,exist_ok=True)
-        last=[0.0]
+        last=[0.0];music_position=[1,1]
         def progress(d):
             now=time.monotonic()
             if d.get('status')=='downloading' and now-last[0]>.6:
                 last[0]=now
                 total=d.get('total_bytes') or d.get('total_bytes_estimate') or 0
                 pct=min(100,round(100*d.get('downloaded_bytes',0)/total)) if total else None
-                emit(status='progress',percent=pct,text=f'Скачивание {pct}%' if pct is not None else 'Скачивание…')
+                if music_source:
+                    index,count=music_position
+                    overall=round(((index-1)*100+(pct or 0))/count) if pct is not None else None
+                    emit(status='progress',percent=overall,text=f'Трек {index} из {count}: '+(f'{pct}%' if pct is not None else 'скачивание…'))
+                else:emit(status='progress',percent=pct,text=f'Скачивание {pct}%' if pct is not None else 'Скачивание…')
             elif d.get('status')=='finished': emit(status='processing',text='Подготовка файла…')
         class Quiet:
             def debug(self,*a): pass
@@ -173,8 +179,14 @@ def worker(url, quality='best'):
         if ffmpeg: opts['ffmpeg_location']=str(ffmpeg)
         node=next((p for p in [which('node'),'/opt/homebrew/bin/node','/usr/local/bin/node'] if p and Path(p).is_file()),None)
         if node:opts['js_runtimes']={'node':{'path':node}}
-        emit(status='progress',text='Получение полного видео…')
+        if music_source:
+            opts['format']="bestaudio[protocol~='^(https?|m3u8(_native)?|http_dash_segments)$']"
+            opts['outtmpl']=str(target/'%(title).140B [%(id)s].%(ext)s')
+        emit(status='progress',text='Получение музыки…' if music_source else 'Получение полного видео…')
         with yt_dlp.YoutubeDL(opts) as ydl:
+            if music_source:
+                music_download(ydl,url,target,emit,valid_url,lambda i,n:music_position.__setitem__(slice(None),[i,n]))
+                return 0
             info=resolve_video(ydl,url)
             info=ydl.process_ie_result(info,download=True)
             # Completion requires an actual complete media file, not only a finished fragment.
@@ -186,7 +198,7 @@ def worker(url, quality='best'):
             emit(status='done',text='Сохранено в Загрузки/Яндекс Видео',filename=str(file))
         return 0
     except Exception as exc:
-        emit(status='error',text=error_message(exc));return 1
+        emit(status='error',text=str(exc) if isinstance(exc,MusicUnavailable) else error_message(exc));return 1
 
 def main():
     if len(sys.argv)>1 and sys.argv[1]=='--worker':
@@ -199,7 +211,7 @@ def main():
     try: msg=read_message(input_stream)
     except (EOFError,ValueError,json.JSONDecodeError): return 2
     if msg.get('action')=='ping':
-        send({'status':'ready','version':'2.2.5'});return 0
+        send({'status':'ready','version':'2.3.0'});return 0
     if msg.get('action')=='open-folder':
         try:
             target=Path.home()/'Downloads'/'Яндекс Видео'

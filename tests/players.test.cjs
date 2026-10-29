@@ -326,3 +326,42 @@ test('open/reveal job actions are popup-only and use saved output path, never ca
  assert.ok((await send('yvd-open-job')).ok);assert.equal(calls[0].action,'open-file');assert.equal(calls[0].filename,'/fixed/video.mp4');
  assert.ok((await send('yvd-reveal-job')).ok);assert.equal(calls[1].action,'reveal-file');
 });
+
+test('Yandex Music uses exact row/player links and album control, rejects wrong hosts',()=>{
+ const M=require('../music.js'),a=href=>({getAttribute:k=>k==='href'?href:null,textContent:'Трек'});
+ const row={querySelectorAll:()=>[a('/album/1750287/track/15608804')]};
+ const player={querySelectorAll:()=>[a('/album/1750287/track/15495541')]},header={};
+ const doc={querySelector:()=>({textContent:'Apero Lounge'}),querySelectorAll:s=>s.includes('CommonTrack_root')?[row]:s.includes('PageHeaderBase_controls')?[header]:[player]};
+ const controls=M.controls(doc,'https://music.yandex.ru/album/1750287');
+ assert.equal(controls.length,3);assert.equal(controls[0].info.url,'https://music.yandex.ru/album/1750287/track/15608804');
+ assert.equal(controls[1].info.url,'https://music.yandex.ru/album/1750287/track/15495541');assert.equal(controls[2].info.media,'album');
+ assert.equal(M.current(doc,'https://music.yandex.ru/').url,controls[1].info.url);
+ for(const bad of ['https://music.yandex.ru.evil/album/1','https://u:p@music.yandex.ru/album/1','https://music.yandex.ru:12/album/1','file:///album/1'])assert.equal(M.url(bad),null);
+ assert.equal(M.controls(doc,'https://example.com/album/1750287').length,0);
+});
+
+test('music row download/stop and album progress use existing isolated controls',async()=>{
+ const body=new El('body'),row=new El('div'),requests=[];let receive;
+ row.getBoundingClientRect=()=>({left:110,top:220,right:820,bottom:276,width:710,height:56});row.querySelectorAll=()=>[];
+ const info={url:'https://music.yandex.ru/album/1750287',title:'Album',media:'album',musicPosition:'album'};
+ const doc={body,title:'Music',createElement:t=>new El(t),querySelectorAll:()=>[],querySelector:()=>null};
+ const chrome={runtime:{onMessage:{addListener:f=>receive=f},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?[]:{ok:true}}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,chrome,location:{href:info.url},window:{addEventListener(){}},MutationObserver:class{observe(){}},setTimeout(){},setInterval(){},YVD:{genericCards:()=>[],currentVideo:()=>null},YVM:{controls:()=>[{element:row,info}],current:()=>null}});
+ const ui=body.children[0].shadowRoot.children.find(e=>e.dataset.signature);
+ assert.equal(ui.children[0].textContent,'↓ Скачать альбом');await ui.children[0].listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.at(-1).url,info.url);
+ receive({type:'yvd-state',url:info.url,status:'progress',percent:40,text:'Сохранено 2 из 5'});
+ assert.equal(ui.children[0].textContent,'■ Остановить альбом 40%');await ui.children[0].listeners.click({preventDefault(){},stopPropagation(){}});assert.equal(requests.at(-1).type,'yvd-cancel');assert.equal(row.children.length,0);
+});
+
+test('album completions persist individual tracks with file actions; cancellation keeps saved children',async()=>{
+ const ports=[],id='music-history',saved={};const chrome={runtime:{id,getURL:p=>'chrome-extension://'+id+'/'+p,onMessage:event(),connectNative(){const p={onMessage:event(),onDisconnect:event(),sent:[],postMessage(m){this.sent.push(m)},disconnect(){}};ports.push(p);return p}},tabs:{onRemoved:event(),sendMessage:async()=>{}},storage:{local:{get:async()=>({}),set:async x=>Object.assign(saved,x)}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../background.js'),'utf8'),{chrome,YVD,Map,Date,importScripts(){}});
+ const listener=chrome.runtime.onMessage.listeners[0],album='https://music.yandex.ru/album/1',track=album+'/track/2';
+ const send=(msg,popup=false)=>new Promise(resolve=>listener(msg,popup?{id,url:chrome.runtime.getURL('popup.html')}:{id,url:album,tab:{id:1}},resolve));
+ assert.ok((await send({type:'yvd-start',url:album})).ok);
+ ports[0].onMessage.listeners[0]({status:'progress',completedUrl:track,completedTitle:'Artist — Track',completedFilename:'/fixed/track.mp3'});
+ let list=await send({type:'yvd-downloads'},true);assert.equal(list.find(j=>j.url===track).filename,'/fixed/track.mp3');assert.equal(list.find(j=>j.url===track).status,'done');
+ await send({type:'yvd-cancel',url:album});assert.equal(ports[0].sent.at(-1).action,'cancel');ports[0].onMessage.listeners[0]({status:'cancelled'});
+ list=await send({type:'yvd-downloads'},true);assert.equal(list.find(j=>j.url===track).status,'done');assert.equal(list.find(j=>j.url===album).status,'cancelled');
+ assert.equal((await send({type:'yvd-status'})).find(j=>j.url===track).downloaded,true);
+});
