@@ -74,6 +74,7 @@
     paintVideoActions();
     for(const item of records.values())render(item.ui,item.info);
     const current=currentInfo();
+    if(videoActions&&current?.url===videoActions.info.url){panel?.remove();panel=null;return;}
     if(!current||!preferences.showCurrentPanel){panel?.remove();panel=null;return;}
     if(!panel){panel=document.createElement('aside');panel.id='yvd-current';panel.className='control panel';panel.setAttribute('aria-label','Скачать текущее видео');ensureRoot().append(panel);}
     render(panel,current,true);
@@ -87,7 +88,7 @@
   }
   function positionAll(){
     // Read all geometry first, then touch only our isolated overlay.
-    const positions=Array.from(records.values(),item=>{const measured=measure(item.card,item.info);return {item,...measured,shown:bound(item)&&visible(measured.outer)&&exposed(item.card,measured.box)};});
+    const positions=Array.from(records.values(),item=>{const measured=measure(item.card,item.info);return {item,...measured,shown:!(videoActions&&!item.info.musicPosition&&(item.info.url===videoActions.info.url||item.card.contains?.(videoActions.video)))&&bound(item)&&visible(measured.outer)&&exposed(item.card,measured.box)};});
     positionVideoActions();
     for(const {item,outer,box,shown} of positions){
       const ui=item.ui;if(!ui.style)continue;
@@ -136,44 +137,49 @@
     if(!info.url)return;
     if(videoActions?.video===video&&videoActions.info.url===info.url)return;
     clearAdControls();const ui=document.createElement('aside');ui.className='control video-actions';ui.setAttribute('aria-label','Скачивание видео');ensureRoot().append(ui);
-    videoActions={video,info,ui};paintVideoActions();
+    videoActions={video,root:videoRoot(video),info,ui};paintVideoActions();
   }
   function positionVideoActions(){
     if(!videoActions?.ui.style)return;
+    if(preferences.showCurrentPanel){videoActions.ui.style.display='flex';videoActions.ui.style.left='auto';videoActions.ui.style.top='auto';videoActions.ui.style.right='20px';videoActions.ui.style.bottom='20px';return;}
+    videoActions.ui.style.right='auto';videoActions.ui.style.bottom='auto';
     const r=rectOf(videoActions.video),shown=visible(r)&&exposed(videoRoot(videoActions.video),r);
     videoActions.ui.style.display=shown?'flex':'none';
     videoActions.ui.style.left=Math.max(4,r.right-260)+'px';videoActions.ui.style.top=Math.max(4,r.top+8)+'px';
   }
   async function startVideoRequest(request){
-    const owner=videoActions;
-    try{const reply=await chrome.runtime.sendMessage({type:'yvd-start',url:request.url,title:request.title,quality:request.quality});if(videoActions===owner)waitText=reply?.error||'';}
+    const owner=videoActions;if(owner)owner.starting=true;paintVideoActions();
+    try{const reply=await chrome.runtime.sendMessage({type:'yvd-start',url:request.url,title:request.title,quality:request.quality,mediaUrl:request.mediaUrl});if(videoActions===owner)waitText=reply?.error||'';}
     catch{if(videoActions===owner)waitText='Обновите страницу после обновления расширения.';}
-    paintVideoActions();
+    if(videoActions===owner&&owner)owner.starting=false;paintVideoActions();
   }
   function tickAdWait(){
     if(!adwait||!videoActions||adwait.view().state!=='waiting')return;
-    const video=videoActions.video,current=YVD.currentVideo(document,location.href);
-    const request=adwait.observe({page:location.href,source:current?.url,connected:video.isConnected!==false,ad:YVA.isAd(video),playing:video.paused===false&&!video.ended&&video.readyState>=2,time:video.currentTime,now:Date.now()});
+    let video=videoActions.video;
+    if(video.isConnected===false&&videoActions.root!==video&&videoActions.root.isConnected!==false){
+      const replacements=[...videoActions.root.querySelectorAll('video')].filter(v=>v.isConnected!==false&&visible(rectOf(v)));
+      if(replacements.length===1)video=videoActions.video=replacements[0];
+    }
+    const current=YVD.currentVideo(document,location.href);
+    const request=adwait.observe({page:location.href,source:current?.url,connected:video.isConnected!==false,ad:YVA.isAd(video),playing:video.paused===false&&!video.ended&&video.readyState>=2,time:video.currentTime,media:video.currentSrc||video.src||'',now:Date.now()});
     if(request)startVideoRequest(request);
     paintVideoActions();
   }
   function paintVideoActions(){
     if(!videoActions||!adwait)return;
     const {ui,info}=videoActions,view=adwait.view(),waiting=view.state==='waiting',state=states.get(info.url),busy=active(state);
-    const text=waitText||(waiting?(view.sawAd?'Жду возврата основного видео после рекламы…':'Жду окончания рекламы. Если сайт не сообщает о ней, после рекламы нажмите «Скачать сейчас».'):view.state==='expired'?'Ожидание истекло (5 минут). Можно скачать сейчас.':view.state==='changed'?'Ожидание отменено: плеер или ролик сменился.':state?.text||'');
-    const signature=JSON.stringify([view,state,text]);if(ui.dataset.signature===signature)return;ui.dataset.signature=signature;ui.replaceChildren();
+    const text=waitText||(waiting?(view.phase==='ad'?'Жду окончания рекламы…':view.phase==='source'?'Жду начала основного видео и ссылки на поток…':'Проверяю готовность потока…'):view.state==='expired'?'Ссылка не появилась за 5 минут. Повторите после начала ролика.':view.state==='changed'?'Ожидание отменено: плеер или ролик сменился.':state?.text||'');
+    const signature=JSON.stringify([view,state,text,preferences.showCurrentPanel,videoActions.starting]);if(ui.dataset.signature===signature)return;ui.dataset.signature=signature;ui.replaceChildren();
+    ui.className='control video-actions'+(preferences.showCurrentPanel?' panel':'');
     const buttons=document.createElement('div');buttons.className='buttons';
-    const now=document.createElement('button');now.type='button';now.textContent=busy?'Отменить загрузку':waiting?'Скачать сейчас':'↓ Скачать видео';
-    now.addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();if(routeChanged())return;
+    const button=document.createElement('button');button.type='button';button.disabled=videoActions.starting===true&&!busy;button.textContent=busy?'Отменить загрузку':waiting?'Отменить ожидание':'↓ Скачать видео';
+    button.addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();if(routeChanged())return;
       if(busy){await chrome.runtime.sendMessage({type:'yvd-cancel',url:info.url});return;}
+      if(adwait.view().state==='waiting'){adwait.cancel();waitText='';paintVideoActions();return;}
       const current=YVD.currentVideo(document,location.href);if(current&&current.url!==info.url){clearAdControls();schedule();return;}
-      const request=waiting?adwait.start():{...info,quality:preferences.quality};if(request)await startVideoRequest(request);
+      waitText='';adwait.arm({...info,page:location.href,quality:preferences.quality,requireAd:false},Date.now());tickAdWait();paintVideoActions();
     });
-    const later=document.createElement('button');later.type='button';later.textContent=waiting?'Отменить ожидание':'После рекламы';later.disabled=busy;
-    later.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();if(routeChanged())return;
-      waitText='';if(adwait.view().state==='waiting'){adwait.cancel();}else{adwait.arm({...info,page:location.href,quality:preferences.quality},Date.now());tickAdWait();}paintVideoActions();
-    });
-    const status=document.createElement('span');status.className='status';status.setAttribute('aria-live','polite');status.textContent=text;buttons.append(now,later);ui.append(buttons,status);
+    const status=document.createElement('span');status.className='status';status.setAttribute('aria-live','polite');status.textContent=text;buttons.append(button);ui.append(buttons,status);
   }
   function schedule(){routeChanged();for(const [card,item] of records)if(card.isConnected===false){item.ui.remove();records.delete(card);}if(timer===null)timer=setTimeout(()=>{timer=null;refresh();},400);}
   new MutationObserver(schedule).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['href','src','poster','data-ad','data-is-ad','aria-label']});

@@ -197,3 +197,29 @@ with tempfile.TemporaryDirectory() as tmp:
   try:music.download(AudioYDL(),'https://music.yandex.ru/album/1',target,lambda **x:events.append(x),host.valid_url)
   except music.MusicUnavailable:pass
  assert not any(x['status']=='done' for x in events) and sum('completedUrl' in x for x in events)==1
+
+# A public post-ad source is only a bounded fallback, not a way around source guards.
+class MediaFallback:
+ def __init__(self,error):self.calls=[];self.error=error;self.processed=0
+ def extract_info(self,url,download,process=False):
+  self.calls.append(url);return {'id':'content','title':'content'}
+ def process_ie_result(self,info,download):
+  self.processed+=1
+  if self.processed==1:raise ValueError(self.error)
+  return info
+page='https://example.com/watch/1';media='https://cdn.example/main.m3u8'
+ydl=MediaFallback('HTTP Error 403: Forbidden');called=[]
+fallback=host.download_video(ydl,page,media,lambda:called.append(True))
+assert len(fallback['id'])==16 and fallback['title']=='content' and fallback['webpage_url']==page
+assert ydl.calls==[page,media] and called==[True]
+for error in ['DRM encrypted source','sign in required','multiple videos: ambiguous source','Private/local network targets are disabled','disk full','HTTP Error 401']:
+ ydl=MediaFallback(error)
+ try:host.download_video(ydl,page,media)
+ except ValueError:pass
+ else:raise AssertionError('ineligible source failure allowed fallback')
+ assert ydl.calls==[page]
+ydl=MediaFallback('unsupported url')
+try:host.download_video(ydl,page,'http://127.0.0.1/a.mp4')
+except ValueError:pass
+else:raise AssertionError('private fallback accepted')
+assert ydl.calls==[page]

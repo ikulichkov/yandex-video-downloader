@@ -66,7 +66,8 @@ function startReady(msg,tab,reply){
       if(!job.active)port.disconnect();
     });
     port.onDisconnect.addListener(()=>{const error=chrome.runtime.lastError;if(job.active){job.active=false;notify(job,{status:'error',text:helperError(error)});}});
-    port.postMessage({action:'download',url,quality});reply({ok:true});
+    const mediaUrl=typeof msg.mediaUrl==='string'&&msg.mediaUrl.length<=4096?YVD.publicURL(msg.mediaUrl):null;
+    port.postMessage({action:'download',url,quality,...(mediaUrl?{mediaUrl}:{})});reply({ok:true});
   }catch(error){job.active=false;notify(job,{status:'error',text:helperError(error)});reply({error:helperError(error)});}
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{

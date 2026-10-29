@@ -403,7 +403,7 @@ test('player download sits within both player rectangles instead of dangling abo
 
 test('deferred download requires explicit ad then sustained content playback; never guesses from ended or src',()=>{
  const A=require('../adwait.js'),w=A.create(),ctx={page:'https://example.com/watch/1',url:'https://example.com/watch/1',quality:'720'};
- const sample={page:ctx.page,source:ctx.url,connected:true,ad:false,playing:true,time:10,now:100};
+ const sample={page:ctx.page,source:ctx.url,connected:true,ad:false,playing:true,time:10,now:100,media:'https://cdn.example/main.mp4'};
  w.arm(ctx,0);assert.equal(w.observe(sample),null);assert.equal(w.observe({...sample,time:50,now:10000}),null);assert.equal(w.view().sawAd,false);
  w.observe({...sample,ad:true,now:11000});assert.equal(w.view().sawAd,true);
  assert.equal(w.observe({...sample,now:12000,time:0}),null);assert.equal(w.observe({...sample,now:13000,time:1}),null);
@@ -417,15 +417,55 @@ test('deferred download requires explicit ad then sustained content playback; ne
 
 test('on-player after-ad button defers native start, preserves webpage source and permits cancellation',async()=>{
  const A=require('../adwait.js'),body=new El('body'),video=new El('video'),requests=[];let interval,clock=0,ad=true;
- video.getBoundingClientRect=()=>({left:20,top:100,right:660,bottom:460,width:640,height:360});video.closest=s=>s.includes('.vjs-ad-playing')&&ad?{}:null;video.paused=false;video.readyState=4;video.currentTime=1;
+ video.getBoundingClientRect=()=>({left:20,top:100,right:660,bottom:460,width:640,height:360});video.closest=s=>s.includes('.vjs-ad-playing')&&ad?{}:null;video.paused=false;video.readyState=4;video.currentTime=1;video.currentSrc='https://cdn.example/ad.mp4';
  const page='https://example.com/watch/1',doc={body,title:'Content',createElement:t=>new El(t),querySelectorAll:s=>s==='video'?[video]:[],querySelector:()=>null,addEventListener(){}};
  const chrome={runtime:{onMessage:{addListener(){}},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?[]:{ok:true}}}};
  vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,chrome,Date:{now:()=>clock},location:{href:page},window:{addEventListener(){}},MutationObserver:class{observe(){}},setTimeout(){},setInterval:f=>interval=f,YVD:{publicURL:x=>x,genericCards:()=>[],currentVideo:()=>({url:page,title:'Content'})},YVA:A});
  const ui=body.children[0].shadowRoot.children.find(e=>e.className==='control video-actions');assert.ok(ui);
  const click=button=>button.listeners.click({preventDefault(){},stopPropagation(){}});
- await click(ui.children[0].children[1]);assert.equal(requests.filter(m=>m.type==='yvd-start').length,0);assert.equal(ui.children[0].children[1].textContent,'Отменить ожидание');
- ad=false;clock=1000;video.currentTime=0;interval();clock=2000;video.currentTime=1;interval();assert.equal(requests.filter(m=>m.type==='yvd-start').length,0);
- clock=3000;video.currentTime=2;interval();await Promise.resolve();assert.equal(requests.filter(m=>m.type==='yvd-start').length,1);assert.equal(requests.at(-1).url,page);
+ await click(ui.children[0].children[0]);assert.equal(requests.filter(m=>m.type==='yvd-start').length,0);assert.equal(ui.children[0].children.length,1);assert.equal(ui.children[0].children[0].textContent,'Отменить ожидание');
+ ad=false;video.currentSrc='https://cdn.example/main.mp4';clock=1000;video.currentTime=0;interval();clock=2000;video.currentTime=1;interval();assert.equal(requests.filter(m=>m.type==='yvd-start').length,0);
+ clock=3000;video.currentTime=2;interval();await Promise.resolve();assert.equal(requests.filter(m=>m.type==='yvd-start').length,1);assert.equal(requests.at(-1).url,page);assert.equal(requests.at(-1).mediaUrl,'https://cdn.example/main.mp4');
  // Re-arming and cancelling never schedules another download.
- ad=true;await click(ui.children[0].children[1]);await click(ui.children[0].children[1]);ad=false;clock=8000;video.currentTime=10;interval();assert.equal(requests.filter(m=>m.type==='yvd-start').length,1);
+ ad=true;await click(ui.children[0].children[0]);await click(ui.children[0].children[0]);ad=false;clock=8000;video.currentTime=10;interval();assert.equal(requests.filter(m=>m.type==='yvd-start').length,1);
+});
+
+test('late post-ad URL must appear and stay stable; blob and ad URLs never become media fallback',()=>{
+ const A=require('../adwait.js'),ctx={page:'https://example.com/watch/1',url:'https://example.com/watch/1',requireAd:false},w=A.create();
+ const base={page:ctx.page,source:ctx.url,connected:true,ad:true,playing:true,time:0,now:0,media:'https://cdn.example/ad.mp4'};
+ w.arm(ctx,0);w.observe(base);
+ assert.equal(w.observe({...base,ad:false,media:'',now:2000,time:2}),null);
+ assert.equal(w.observe({...base,ad:false,media:'https://cdn.example/main.m3u8',now:3000,time:3}),null);
+ assert.equal(w.observe({...base,ad:false,media:'https://cdn.example/main2.m3u8',now:4000,time:4}),null);
+ assert.equal(w.observe({...base,ad:false,media:'https://cdn.example/main2.m3u8',now:5000,time:5}),null);
+ assert.equal(w.observe({...base,ad:false,media:'https://cdn.example/main2.m3u8',now:6000,time:6}).mediaUrl,'https://cdn.example/main2.m3u8');
+ for(const media of ['blob:https://example.com/stream','https://cdn.example/ad.mp4']){
+  w.arm(ctx,0);w.observe(base);w.observe({...base,ad:false,media,now:1000,time:1});const request=w.observe({...base,ad:false,media,now:3000,time:3});assert.equal(request.url,ctx.url);assert.equal(request.mediaUrl,undefined);
+ }
+ w.arm(ctx,0);w.observe({...base,ad:false});const noAd=w.observe({...base,ad:false,now:2000,time:2});assert.equal(noAd.mediaUrl,undefined);
+});
+
+test('post-ad fallback is ephemeral: background forwards it but persists/retries only the page identity',async()=>{
+ const ports=[],writes=[],id='ephemeral-media',page='https://example.com/watch/1',media='https://cdn.example/main.m3u8?temporary=example';
+ const chrome={runtime:{id,getURL:p=>'chrome-extension://'+id+'/'+p,onMessage:event(),connectNative(){const p={onMessage:event(),onDisconnect:event(),sent:[],postMessage(m){this.sent.push(m)},disconnect(){}};ports.push(p);return p}},tabs:{onRemoved:event(),sendMessage:async()=>{}},storage:{local:{get:async()=>({}),set:async x=>writes.push(x)}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../background.js'),'utf8'),{chrome,YVD,Map,Date,importScripts(){}});
+ const send=(msg,popup=false)=>new Promise(resolve=>chrome.runtime.onMessage.listeners[0](msg,popup?{id,url:chrome.runtime.getURL('popup.html')}:{id,url:page,tab:{id:1}},resolve));
+ assert.ok((await send({type:'yvd-start',url:page,mediaUrl:media})).ok);assert.equal(ports[0].sent[0].mediaUrl,media);
+ ports[0].onMessage.listeners[0]({status:'error',text:'Source error'});await Promise.resolve();assert.ok(!JSON.stringify(writes).includes('temporary='));
+ await send({type:'yvd-retry-job',url:page},true);assert.equal(ports[1].sent[0].mediaUrl,undefined);
+});
+
+test('one current-player control replaces duplicate card/panel and follows unique same-root post-ad video replacement',async()=>{
+ const A=require('../adwait.js'),body=new El('body'),root=new El('div'),old=new El('video'),next=new El('video'),requests=[];let interval,clock=0,replaced=false;
+ const rect=()=>({left:20,top:100,right:660,bottom:460,width:640,height:360});root.getBoundingClientRect=rect;root.isConnected=true;root.contains=e=>e===old||e===next;
+ for(const v of [old,next]){v.getBoundingClientRect=rect;v.paused=false;v.readyState=4;v.currentTime=1;v.closest=s=>s.includes('.video-js,')?root:s.includes('.vjs-ad-playing')&&v===old?root:null;}
+ old.currentSrc='https://cdn.example/ad.mp4';old.isConnected=true;next.currentSrc='https://cdn.example/main.mp4';next.isConnected=true;root.querySelectorAll=s=>s==='video'?(replaced?[next]:[old]):[];
+ const page='https://example.com/watch/1',doc={body,title:'Content',createElement:t=>new El(t),querySelectorAll:s=>s==='video'?[old]:[],querySelector:()=>null,addEventListener(){}};
+ const chrome={runtime:{onMessage:{addListener(){}},sendMessage:async m=>{requests.push(m);return m.type==='yvd-status'?[]:{ok:true}}},storage:{local:{get:async()=>({placement:'top-left',showCurrentPanel:true,quality:'720'})}}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'),'utf8'),{document:doc,chrome,Date:{now:()=>clock},location:{href:page},window:{addEventListener(){}},MutationObserver:class{observe(){}},setTimeout(){},setInterval:f=>interval=f,YVD:{publicURL:x=>x,genericCards:()=>[{element:root,info:{url:page,title:'Content'}}],currentVideo:()=>({url:page,title:'Content'})},YVA:A});
+ await Promise.resolve();const shadow=body.children[0].shadowRoot,ui=shadow.children.find(e=>(e.className||'').includes('video-actions'));
+ assert.equal(ui.children[0].children.length,1);assert.ok(ui.className.includes('panel'));assert.equal(findUI(body,'yvd-current'),undefined);assert.equal(cardControls(body)[0].style.display,'none');
+ await ui.children[0].children[0].listeners.click({preventDefault(){},stopPropagation(){}});
+ replaced=true;old.isConnected=false;clock=1000;next.currentTime=0;interval();clock=3000;next.currentTime=2;interval();await Promise.resolve();
+ assert.equal(requests.filter(m=>m.type==='yvd-start').length,1);assert.equal(requests.at(-1).mediaUrl,next.currentSrc);
 });

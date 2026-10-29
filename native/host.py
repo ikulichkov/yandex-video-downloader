@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Private Chrome native host. No shell, cookies, credentials or listening socket."""
-import json, os, re, signal, struct, subprocess, sys, threading, time, socket, ipaddress
+import hashlib, json, os, re, signal, struct, subprocess, sys, threading, time, socket, ipaddress
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs, parse_qsl
 HOST = 'ru.local.yandex_video_downloader'
@@ -100,6 +100,25 @@ def resolve_video(ydl,url):
         return info
     return visit(ydl.extract_info(url,download=False,process=False))
 
+def download_video(ydl,url,media_url=None,on_fallback=None):
+    """At most one fallback from a stable public post-ad source; never bypass guards."""
+    original=None
+    try:
+        original=resolve_video(ydl,url)
+        return ydl.process_ie_result(original,download=True)
+    except Exception as exc:
+        text=str(exc).lower()
+        denied=re.search(r'private/local|local network|multiple videos|drm|encrypted|captcha|sign in|log ?in|unauthorized|401',text)
+        eligible=re.search(r'unsupported url|no video formats|no formats found|403|forbidden|404|unable to extract|unable to download|failed to download|http error|urlopen error|timed out|timeout',text)
+        if not media_url or denied or not eligible or not valid_url(media_url) or len(media_url)>4096 or source_identity(media_url)==source_identity(url):raise
+        if on_fallback:on_fallback()
+        info=resolve_video(ydl,media_url)
+        # Temporary signed URLs must not become persistent filenames/identities.
+        info['id']=hashlib.sha256(url.encode()).hexdigest()[:16]
+        info['title']=str((original or {}).get('title') or 'Видео')[:200]
+        info['webpage_url']=url;info['original_url']=url
+        return ydl.process_ie_result(info,download=True)
+
 def downloaded_file(value,media_only=False):
     if not isinstance(value,str) or not value: raise ValueError('missing file')
     target=(Path.home()/'Downloads'/'Яндекс Видео').resolve()
@@ -137,6 +156,8 @@ def open_download(file,reveal=False):
 
 def worker(url, quality='best'):
     from music import identity as music_identity, download as music_download, MusicUnavailable
+    media_url=os.environ.pop('YVD_MEDIA_URL','')
+    if media_url and (not valid_url(media_url) or len(media_url)>4096):return 2
     # Separate process permits real cancellation, including extractor/ffmpeg children.
     def emit(**msg): print(json.dumps(msg,ensure_ascii=False),flush=True)
     try:
@@ -187,8 +208,7 @@ def worker(url, quality='best'):
             if music_source:
                 music_download(ydl,url,target,emit,valid_url,lambda i,n:music_position.__setitem__(slice(None),[i,n]))
                 return 0
-            info=resolve_video(ydl,url)
-            info=ydl.process_ie_result(info,download=True)
+            info=download_video(ydl,url,media_url,lambda:emit(status="progress",text="Пробую готовый поток основного видео…"))
             # Completion requires an actual complete media file, not only a finished fragment.
             expected=Path(ydl.prepare_filename(info))
             candidates=[Path(info['filepath'])] if info.get('filepath') else []
@@ -211,7 +231,7 @@ def main():
     try: msg=read_message(input_stream)
     except (EOFError,ValueError,json.JSONDecodeError): return 2
     if msg.get('action')=='ping':
-        send({'status':'ready','version':'2.3.0'});return 0
+        send({'status':'ready','version':'2.3.2'});return 0
     if msg.get('action')=='open-folder':
         try:
             target=Path.home()/'Downloads'/'Яндекс Видео'
@@ -239,9 +259,13 @@ def main():
     quality=msg.get('quality','best')
     if quality not in ('best','1080','720','480','360'):
         send({'status':'error','text':'Недопустимое качество видео.'});return 2
+    media_url=msg.get('mediaUrl','')
+    if media_url is None:media_url=''
+    if not isinstance(media_url,str) or len(media_url)>4096 or media_url and not valid_url(media_url):
+        send({'status':'error','text':'Недопустимая ссылка на медиапоток.'});return 2
     # The worker never reads native commands. Inheriting that pipe can stall
     # Windows interpreter startup while the control thread waits on the same pipe.
-    process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker',msg['url'],quality],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,encoding='utf-8',env={**os.environ,'PYTHONIOENCODING':'utf-8'},start_new_session=sys.platform!='win32',creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=='win32' else 0)
+    process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker',msg['url'],quality],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,encoding='utf-8',env={**os.environ,'PYTHONIOENCODING':'utf-8','YVD_MEDIA_URL':media_url},start_new_session=sys.platform!='win32',creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=='win32' else 0)
     cancelled=threading.Event();finished=threading.Event()
     def stop():
         if process.poll() is None:
